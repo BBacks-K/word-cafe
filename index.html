@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2B2622">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Word Cafe">
 <title>Word Cafe</title>
@@ -37,7 +38,7 @@
 *{box-sizing:border-box}
 body{margin:0}
 html,body{min-height:100%}
-body{background:var(--bg);color:var(--fg);font:16px/1.6 var(--sans);-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--fg);font:16px/1.6 var(--sans);-webkit-text-size-adjust:100%;word-break:keep-all}
 body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:var(--bar);z-index:10}
 button,textarea{font:inherit;color:inherit}
 button{cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
@@ -129,16 +130,39 @@ label.lbl{font-size:14px;font-weight:700}
 textarea{width:100%;border:1.5px solid var(--line2);border-radius:12px;padding:12px 14px;font-size:16px;line-height:1.7;background:var(--surface);resize:vertical;min-height:260px}
 .msg{font-size:15px;font-weight:500}
 .msg.ok{color:var(--green-ink)}.msg.no{color:var(--wrong-ink)}
+.sets{display:flex;flex-direction:column;gap:14px}
+.seg{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.segb{min-height:44px;padding:0 16px;border-radius:999px;border:1.5px solid var(--line2);background:var(--surface);font-size:15px;font-weight:500}
+.segb[aria-pressed="true"]{background:var(--green);border-color:var(--green);color:var(--on-green);font-weight:700}
+.ex{margin:14px 0 0;padding:10px 14px;border-radius:12px;background:var(--surface2);font-family:var(--serif);font-size:19px;line-height:1.55;overflow-wrap:anywhere}
+.exl{display:inline-block;margin-right:10px;font:700 12px var(--sans);letter-spacing:.06em;color:var(--green-ink)}
+.timer{display:flex;justify-content:space-between;align-items:baseline;font-size:14px;color:var(--muted);margin-top:4px}
+.timer b{font-size:18px;color:var(--fg);font-variant-numeric:tabular-nums}
+.timer.low,.timer.low b{color:var(--wrong-ink)}
+.fill.t{background:var(--clay);transition:none}
 </style>
 </head>
 <body>
 <div id="app"></div>
 
+<script src="lib.js"></script>
 <script>
-const SAMPLE = [
+const OLD_SAMPLE = [
   'abandon, 버리다, 포기하다','ambiguous, 모호한, 애매한','benefit, 이익, 혜택','contract, 계약(서)',
   'deny, 부인하다, 거부하다','efficient, 효율적인','fluctuate, 변동하다, 오르내리다',
   'genuine, 진짜의, 진심의','hesitate, 망설이다, 주저하다','inevitable, 피할 수 없는'
+].join('\n');
+const SAMPLE = [
+  'abandon, 버리다, 포기하다 | He had to abandon his plan.',
+  'ambiguous, 모호한, 애매한 | The answer was ambiguous.',
+  'benefit, 이익, 혜택 | Reading has many benefits.',
+  'contract, 계약(서) | She signed the contract today.',
+  'deny, 부인하다, 거부하다 | He denied breaking the window.',
+  'efficient, 효율적인 | This is an efficient way to study.',
+  'fluctuate, 변동하다, 오르내리다 | Prices fluctuate every week.',
+  'genuine, 진짜의, 진심의 | It is a genuine leather bag.',
+  'hesitate, 망설이다, 주저하다 | Do not hesitate to ask.',
+  'inevitable, 피할 수 없는 | Change is inevitable.'
 ].join('\n');
 const KEYS = ['A','B','C','D'];
 const EYES = {
@@ -151,23 +175,18 @@ const store = {
   get(k,d){try{const v=localStorage.getItem(k);return v==null?d:v}catch(e){return d}},
   set(k,v){try{localStorage.setItem(k,v)}catch(e){}}
 };
-const LINE = /^(.+?)\s*(?:\t|\s-\s|\s*[,:=]\s*)\s*(.+)$/;
-function parse(text){
-  const seen={},out=[];
-  String(text).split(/\r?\n/).forEach(line=>{
-    const m=LINE.exec(line.trim()); if(!m) return;
-    const w=m[1].trim(),ko=m[2].trim(),key=w.toLowerCase();
-    if(!w||!ko||seen[key]) return;
-    seen[key]=true; out.push({w,ko});
-  });
-  return out;
-}
-function shuffle(a){const r=a.slice();for(let i=r.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[r[i],r[j]]=[r[j],r[i]]}return r}
+const { parse, blankWord, buildQuiz } = WC;
 function esc(t){return String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function loadWrong(){try{const a=JSON.parse(store.get('wc_wrong','[]'));return Array.isArray(a)?a:[]}catch(e){return[]}}
 
-const text0 = store.get('wc_words', SAMPLE);
-const s = {screen:'start',text:text0,draft:text0,wrong:loadWrong(),words:[],quiz:[],qi:0,picked:-1,score:0,hint:false,missed:[],fixed:[]};
+const saved0 = store.get('wc_words', SAMPLE);
+const text0 = saved0 === OLD_SAMPLE ? SAMPLE : saved0; // 예문 없는 옛 예시는 새 예시로 교체
+function loadCfg(){
+  try{const c=JSON.parse(store.get('wc_cfg','{}'));return {count:[10,30,50].indexOf(c.count)>=0?c.count:10,sec:[0,10,20,30,60].indexOf(c.sec)>=0?c.sec:0}}catch(e){return{count:10,sec:0}}
+}
+const s = {screen:'start',text:text0,draft:text0,wrong:loadWrong(),words:[],quiz:[],qi:0,picked:-1,score:0,hint:false,missed:[],fixed:[],cfg:loadCfg(),deadline:0};
+let timerId = 0;
+const TIMEOUT = 99; // 시간 초과는 어떤 보기와도 겹치지 않는 값으로 기록한다
 const app = document.getElementById('app');
 
 function mascot(mood){
@@ -206,6 +225,8 @@ function coach(parsedLen,draftLen){
   }else if(!c.answered){
     if(s.hint){mood='think';text='오답 두 개를 지워 줬어요. 이제 둘 중에 골라 봐요.'}
     else text=c.q.wasWrong?'이 단어, 전에 틀렸던 거예요. 이번엔 맞혀 봐요.':'천천히 생각해 봐요. 막히면 힌트를 눌러요.';
+  }else if(s.picked===TIMEOUT){
+    mood='sad';text='시간이 다 됐어요. '+c.word.w+' = '+c.word.ko+'. 저장해 둘게요, 다음 시험에 또 나와요.';
   }else if(s.picked===c.q.cpos){
     mood='happy';text=c.q.wasWrong?'틀렸던 단어를 맞혔어요! 이제 복습 목록에서 빠져요.':'정답이에요! '+c.word.w+' = '+c.word.ko;
   }else{
@@ -214,6 +235,10 @@ function coach(parsedLen,draftLen){
   return {text,mood};
 }
 
+function seg(label,key,vals,fmt){
+  return '<div class="set"><div class="lbl">'+label+'</div><div class="seg" role="group" aria-label="'+label+'">'
+   +vals.map(v=>'<button class="segb" data-act="cfg" data-key="'+key+'" data-val="'+v+'" aria-pressed="'+(s.cfg[key]===v)+'">'+fmt(v)+'</button>').join('')+'</div></div>';
+}
 function startView(parsed){
   const wl=savedWrongList(), few=parsed.length<4;
   return '<div class="card">'
@@ -225,6 +250,8 @@ function startView(parsed){
    +'<div class="stat w"><small>틀렸던 단어 (저장됨)</small><strong>'+wl.length+'</strong> <span>개</span></div></div>'
    +(wl.length?'<div class="rows">'+wl.map(w=>'<div class="row"><span class="tag">틀렸던 단어</span><span class="en">'+esc(w.w)+'</span><span class="ko">'+esc(w.ko)+'</span></div>').join('')+'</div>':'')
    +(few?'<p class="warn">시험을 보려면 단어가 4개 이상 필요해요. 단어장을 먼저 채워 주세요.</p>':'')
+   +'<div class="sets">'+seg('문제 수','count',[10,30,50],v=>v+'문제')+seg('문제당 제한 시간','sec',[0,10,20,30,60],v=>v?v+'초':'없음')+'</div>'
+   +(!few&&parsed.length<s.cfg.count?'<p class="note">단어장에 단어가 '+parsed.length+'개라서 '+parsed.length+'문제만 나와요.</p>':'')
    +'<div class="btns"><button class="btn" data-act="start"'+(few?' disabled':'')+'>시험 시작하기</button>'
    +'<button class="btn ghost" data-act="edit">단어장 편집</button></div>'
    +'<p class="note">단어장과 틀린 단어 기록은 지금 쓰는 기기와 브라우저에만 저장돼요.</p></div>';
@@ -232,7 +259,7 @@ function startView(parsed){
 function editView(){
   const n=parse(s.draft).length;
   return '<div class="card"><h1 class="title" style="font-size:clamp(28px,5vw,36px)">단어장 편집</h1>'
-   +'<p class="lead" style="font-size:15px">한 줄에 한 단어씩 <b>영어 단어, 뜻</b> 순서로 붙여 넣으세요. 쉼표·탭·" - "·":"·"="로 나눠도 되고, 엑셀에서 두 칸을 복사해서 붙여 넣어도 돼요.</p>'
+   +'<p class="lead" style="font-size:15px">한 줄에 한 단어씩 <b>영어 단어, 뜻</b> 순서로 붙여 넣으세요. 쉼표·탭·" - "·":"·"="로 나눠도 돼요. 예문은 뜻 뒤에 <b>|</b>를 붙여 적으세요.<br>예) <b>abandon, 버리다 | He abandoned the plan.</b><br>엑셀에서 세 칸(단어·뜻·예문)을 복사해서 붙여 넣어도 돼요. 예문은 없어도 됩니다.</p>'
    +'<label class="lbl" for="words-input">내 단어 목록</label>'
    +'<textarea id="words-input" rows="12" spellcheck="false" autocapitalize="off" autocomplete="off">'+esc(s.draft)+'</textarea>'
    +'<div id="draft-msg" class="msg"></div>'
@@ -254,12 +281,17 @@ function quizView(){
     return '<button class="'+cls+'" data-act="pick" data-k="'+k+'"'+(c.answered||hidden[k]?' disabled':'')+'><span class="k">'+KEYS[k]+'</span><span>'+esc(label)+'</span>'+mark+'</button>';
   }).join('');
   const pct=(s.qi+(c.answered?1:0))/total*100;
+  const sec=s.cfg.sec,rem=c.answered?s.left:Math.max(0,s.deadline-Date.now());
+  const timer=sec?'<div class="timer'+(c.answered&&s.picked===TIMEOUT?' low':rem<=5000?' low':'')+'"><span>'+(s.picked===TIMEOUT?'시간 초과':'남은 시간')+'</span><b id="tleft" role="timer">'+Math.ceil(rem/1000)+'초</b></div>'
+    +'<div class="track"><div id="tfill" class="fill t" style="width:'+rem/(sec*1000)*100+'%"></div></div>':'';
+  const ex=c.word.ex,exText=ex?(c.answered||c.en2ko?ex:blankWord(ex,c.word.w)):'';
   return '<div style="display:flex;flex-direction:column;gap:16px">'
    +'<div class="prog"><div class="prog-top"><b>문제 '+(s.qi+1)+' / '+total+'</b><span>정답 '+s.score+'개</span></div>'
-   +'<div class="track" role="progressbar" aria-valuemin="0" aria-valuemax="'+total+'" aria-valuenow="'+(s.qi+(c.answered?1:0))+'" aria-label="진행도"><div class="fill" style="width:'+pct+'%"></div></div></div>'
+   +'<div class="track" role="progressbar" aria-valuemin="0" aria-valuemax="'+total+'" aria-valuenow="'+(s.qi+(c.answered?1:0))+'" aria-label="진행도"><div class="fill" style="width:'+pct+'%"></div></div>'+timer+'</div>'
    +'<div class="card"><div><div class="qhead"><span>'+(c.en2ko?'이 단어의 뜻은?':'이 뜻에 맞는 영어 단어는?')+'</span>'
    +(q.wasWrong?'<span class="tag" style="font-size:13px;padding:3px 12px">틀렸던 단어</span>':'')+'</div>'
-   +'<div class="'+(c.en2ko?'q-en':'q-ko')+'" style="margin-top:8px">'+esc(c.en2ko?c.word.w:c.word.ko)+'</div></div>'
+   +'<div class="'+(c.en2ko?'q-en':'q-ko')+'" style="margin-top:8px">'+esc(c.en2ko?c.word.w:c.word.ko)+'</div>'
+   +(exText?'<p class="ex"><span class="exl">예문</span>'+esc(exText)+'</p>':'')+'</div>'
    +'<div class="opts">'+opts+'</div>'
    +'<div class="actions"><button class="btn hint" data-act="hint"'+(s.hint||c.answered?' disabled':'')+'>'+(s.hint?'힌트 사용함':'힌트 (오답 2개 지우기)')+'</button>'
    +(c.answered?'<button id="next" class="btn sm" data-act="next">'+(s.qi>=total-1?'결과 보기':'다음 문제')+'</button>':'')+'</div></div></div>';
@@ -295,23 +327,33 @@ function updateDraft(fromRender){
   if(t)t.textContent=ok?'좋아요. 단어 '+n+'개를 읽었어요.':'한 줄에 "단어, 뜻" 하나씩 적어 주세요.';
 }
 
+function stopTimer(){clearInterval(timerId);timerId=0}
+function startTimer(){
+  stopTimer();
+  if(s.screen!=='quiz'||!s.cfg.sec||s.picked>=0)return;
+  s.deadline=Date.now()+s.cfg.sec*1000;
+  render();
+  timerId=setInterval(tick,250);
+}
+function tick(){
+  const rem=Math.max(0,s.deadline-Date.now()),el=document.getElementById('tleft');
+  if(el){
+    el.textContent=Math.ceil(rem/1000)+'초';
+    document.getElementById('tfill').style.width=rem/(s.cfg.sec*1000)*100+'%';
+    el.parentNode.classList.toggle('low',rem<=5000);
+  }
+  if(rem<=0)pick(TIMEOUT);
+}
+
 function start(){
   const words=parse(s.text);if(words.length<4)return;
-  const wset={};s.wrong.forEach(k=>{wset[k]=1});
-  const idx=words.map((_,i)=>i);
-  const prior=shuffle(idx.filter(i=>wset[words[i].w.toLowerCase()]));
-  const rest=shuffle(idx.filter(i=>!wset[words[i].w.toLowerCase()]));
-  const pick=shuffle(prior.concat(rest).slice(0,Math.min(10,words.length)));
-  const quiz=pick.map(wi=>{
-    const others=shuffle(idx.filter(i=>i!==wi)).slice(0,3);
-    const cpos=Math.floor(Math.random()*4),opts=others.slice();opts.splice(cpos,0,wi);
-    return {wi,opts,cpos,dir:Math.random()<0.5?'en2ko':'ko2en',wasWrong:!!wset[words[wi].w.toLowerCase()]};
-  });
+  const quiz=buildQuiz(words,s.wrong,s.cfg.count);
   Object.assign(s,{screen:'quiz',words,quiz,qi:0,picked:-1,score:0,hint:false,missed:[],fixed:[]});
-  render();window.scrollTo(0,0);
+  render();window.scrollTo(0,0);startTimer();
 }
 function pick(k){
   if(s.picked>=0)return;
+  stopTimer();s.left=Math.max(0,s.deadline-Date.now());
   const q=s.quiz[s.qi],key=s.words[q.wi].w.toLowerCase(),ok=k===q.cpos;
   let wrong=s.wrong;
   if(!ok&&wrong.indexOf(key)<0)wrong=wrong.concat([key]);
@@ -325,7 +367,7 @@ function pick(k){
 function next(){
   if(s.qi>=s.quiz.length-1){s.screen='result';s.hint=false}
   else{s.qi++;s.picked=-1;s.hint=false}
-  render();window.scrollTo(0,0);
+  render();window.scrollTo(0,0);startTimer();
 }
 
 app.addEventListener('click',e=>{
@@ -333,6 +375,7 @@ app.addEventListener('click',e=>{
   const a=b.dataset.act;
   if(a==='start')start();
   else if(a==='pick')pick(+b.dataset.k);
+  else if(a==='cfg'){s.cfg[b.dataset.key]=+b.dataset.val;store.set('wc_cfg',JSON.stringify(s.cfg));render()}
   else if(a==='hint'){s.hint=true;render()}
   else if(a==='next')next();
   else if(a==='home'||a==='cancel'){s.screen='start';render();window.scrollTo(0,0)}
