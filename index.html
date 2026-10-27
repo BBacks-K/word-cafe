@@ -140,6 +140,19 @@ textarea{width:100%;border:1.5px solid var(--line2);border-radius:12px;padding:1
 .timer b{font-size:18px;color:var(--fg);font-variant-numeric:tabular-nums}
 .timer.low,.timer.low b{color:var(--wrong-ink)}
 .fill.t{background:var(--clay);transition:none}
+.sub{color:var(--muted);font-size:14px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.chart{position:relative;width:100%}
+.chart svg{display:block;touch-action:pan-y;max-width:100%}
+.tip{position:absolute;transform:translateX(-50%);pointer-events:none;background:var(--surface);border:1px solid var(--line2);border-radius:10px;padding:8px 12px;font-size:13px;line-height:1.45;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.14);z-index:2}
+.tip b{display:block;font-size:20px;line-height:1.2;font-variant-numeric:tabular-nums}
+.tip span{display:block;color:var(--muted)}
+.tablewrap{overflow-x:auto}
+.tbl{width:100%;border-collapse:collapse;font-size:14px}
+.tbl th,.tbl td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.tbl th:first-child,.tbl td:first-child{text-align:left}
+.tbl th{color:var(--muted);font-weight:500}
+.tbl tr.none td{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -173,9 +186,12 @@ const EYES = {
 };
 const store = {
   get(k,d){try{const v=localStorage.getItem(k);return v==null?d:v}catch(e){return d}},
-  set(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+  set(k,v){try{localStorage.setItem(k,v)}catch(e){storageFailed=true}}
 };
-const { parse, blankWord, buildQuiz, autoNext, timedOut } = WC;
+let storageFailed=false;
+store.set('wc_probe','1'); // 저장이 막힌 브라우저(사생활 보호 모드 등)를 미리 알아챈다
+function saveWarn(){return storageFailed?'<p class="note" style="color:var(--wrong-ink);font-weight:500">이 브라우저에서는 단어장과 기록이 저장되지 않아요. 사생활 보호 모드이거나 저장 공간이 막혀 있을 수 있어요. 창을 닫으면 사라져요.</p>':''}
+const { parse, blankWord, buildQuiz, autoNext, timedOut, dayKey, recordAnswer, sanitizeLog, buckets, totals, trend, niceMax } = WC;
 const AUTO_MS = 5000; // 정답 후 자동으로 넘어가기까지
 let autoId = 0;
 function esc(t){return String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -186,7 +202,9 @@ const text0 = saved0 === OLD_SAMPLE ? SAMPLE : saved0; // 예문 없는 옛 예�
 function loadCfg(){
   try{const c=JSON.parse(store.get('wc_cfg','{}'));return {count:[10,30,50].indexOf(c.count)>=0?c.count:10,sec:[0,10,20,30,60].indexOf(c.sec)>=0?c.sec:0}}catch(e){return{count:10,sec:0}}
 }
-const s = {screen:'start',text:text0,draft:text0,wrong:loadWrong(),words:[],quiz:[],qi:0,picked:-1,score:0,hint:false,missed:[],fixed:[],cfg:loadCfg(),deadline:0};
+function loadLog(){try{return sanitizeLog(JSON.parse(store.get('wc_log','{}')))}catch(e){return{}}}
+const UNITS=[['day','하루','하루 단위 · 최근 14일'],['week','일주일','일주일 단위 · 최근 8주'],['month','한 달','한 달 단위 · 최근 6개월']];
+const s = {log:loadLog(),unit:'day',screen:'start',text:text0,draft:text0,wrong:loadWrong(),words:[],quiz:[],qi:0,picked:-1,score:0,hint:false,missed:[],fixed:[],cfg:loadCfg(),deadline:0};
 let timerId = 0;
 const TIMEOUT = 99; // 시간 초과는 어떤 보기와도 겹치지 않는 값으로 기록한다
 const app = document.getElementById('app');
@@ -219,6 +237,12 @@ function coach(parsedLen,draftLen){
     text=parsedLen<4?'단어장에 단어를 4개 이상 넣어 주세요. 같이 외워 봐요.':n?'틀렸던 단어 '+n+'개가 기다리고 있어요. 이번엔 꼭 잡아 봐요.':'어서 와요. 오늘도 같이 외워 봐요.';
   }else if(s.screen==='edit'){
     text=draftLen>=4?'좋아요. 단어 '+draftLen+'개를 읽었어요.':'한 줄에 "단어, 뜻" 하나씩 적어 주세요.';
+  }else if(s.screen==='stats'){
+    const tr=trend(buckets(s.log,s.unit,new Date()));
+    if(!tr)text='기록이 쌓이면 오답률이 어떻게 변하는지 보여 드릴게요.';
+    else if(tr.diff<-0.5){mood='happy';text='오답률이 '+Math.round(-tr.diff)+'%p 줄었어요. 잘하고 있어요!'}
+    else if(tr.diff>0.5)text='오답률이 조금 올랐어요. 틀렸던 단어를 다시 풀어 봐요.';
+    else text='꾸준히 같은 실력을 유지하고 있어요.';
   }else if(s.screen==='result'){
     const r=s.score/s.quiz.length;
     if(r>=0.9){mood='happy';text='거의 완벽해요! 오늘 공부 제대로 했네요.'}
@@ -247,6 +271,7 @@ function startView(parsed){
    +'<span class="eyebrow">VOCABULARY TEST</span>'
    +'<h1 class="title">오늘의 단어,<br>한 번 풀어볼까요?</h1>'
    +'<p class="lead">영어 단어를 보고 뜻을 고르거나, 뜻을 보고 영어 단어를 고르는 문제가 섞여서 나와요. 틀린 단어는 저장해 두었다가 다음 시험에 먼저 다시 나옵니다.</p>'
+   +saveWarn()
    +(s.text===SAMPLE?'<p class="note">지금은 예시 단어 10개가 들어 있어요. "단어장 편집"에서 내 단어로 바꿔 주세요.</p>':'')
    +'<div class="stats"><div class="stat"><small>내 단어장</small><strong>'+parsed.length+'</strong> <span>개</span></div>'
    +'<div class="stat w"><small>틀렸던 단어 (저장됨)</small><strong>'+wl.length+'</strong> <span>개</span></div></div>'
@@ -255,7 +280,8 @@ function startView(parsed){
    +'<div class="sets">'+seg('문제 수','count',[10,30,50],v=>v+'문제')+seg('문제당 제한 시간','sec',[0,10,20,30,60],v=>v?v+'초':'없음')+'</div>'
    +(!few&&parsed.length<s.cfg.count?'<p class="note">단어장에 단어가 '+parsed.length+'개라서 '+parsed.length+'문제만 나와요.</p>':'')
    +'<div class="btns"><button class="btn" data-act="start"'+(few?' disabled':'')+'>시험 시작하기</button>'
-   +'<button class="btn ghost" data-act="edit">단어장 편집</button></div>'
+   +'<button class="btn ghost" data-act="edit">단어장 편집</button>'
+   +'<button class="btn ghost" data-act="stats">내 기록</button></div>'
    +'<p class="note">단어장과 틀린 단어 기록은 지금 쓰는 기기와 브라우저에만 저장돼요.</p></div>';
 }
 function editView(){
@@ -301,20 +327,94 @@ function quizView(){
 function resultView(){
   const total=s.quiz.length;
   const list=(a,ok)=>'<div class="rows">'+a.map(i=>'<div class="row'+(ok?' ok':'')+'"><span class="tag'+(ok?' ok':'')+'">'+(ok?'복습 성공':'틀렸던 단어')+'</span><span class="en">'+esc(s.words[i].w)+'</span><span class="ko">'+esc(s.words[i].ko)+'</span></div>').join('')+'</div>';
-  return '<div class="card"><div><span class="eyebrow">RESULT</span><div class="score" style="margin-top:6px"><b>'+s.score+'</b><span>/ '+total+'</span></div></div>'
+  return '<div class="card">'+saveWarn()+'<div><span class="eyebrow">RESULT</span><div class="score" style="margin-top:6px"><b>'+s.score+'</b><span>/ '+total+'</span></div></div>'
    +(s.missed.length?'<div class="rows"><h2 class="sec">틀린 단어, 저장했어요. 다음 시험에 먼저 나와요</h2>'+list(s.missed,false)+'</div>':'')
    +(s.fixed.length?'<div class="rows"><h2 class="sec">틀렸던 단어를 이번엔 맞혔어요</h2>'+list(s.fixed,true)+'</div>':'')
-   +'<div class="btns"><button class="btn" data-act="start">한 번 더 풀기</button><button class="btn ghost" data-act="home">처음 화면</button></div></div>';
+   +'<div class="btns"><button class="btn" data-act="start">한 번 더 풀기</button><button class="btn ghost" data-act="stats">내 기록</button><button class="btn ghost" data-act="home">처음 화면</button></div></div>';
 }
+function statsView(){
+  const bs=buckets(s.log,s.unit,new Date()),tot=totals(bs),tr=trend(bs);
+  const cap=UNITS.filter(u=>u[0]===s.unit)[0][2];
+  const tabs='<div class="seg" role="group" aria-label="보는 단위">'+UNITS.map(u=>'<button class="segb" data-act="unit" data-val="'+u[0]+'" aria-pressed="'+(s.unit===u[0])+'">'+u[1]+'</button>').join('')+'</div>';
+  let body;
+  if(!tot.n){
+    body='<p class="note">이 기간에는 푼 문제가 없어요. 시험을 풀면 오답률이 여기에 쌓여요.</p>';
+  }else{
+    const d=tr?Math.round(tr.diff):null;
+    const trendHtml=d==null?'<strong>—</strong><span class="sub"> 기록이 2구간 이상 쌓이면 보여요</span>'
+      :d<0?'<strong>▼ '+(-d)+'</strong> <span>%p 줄었어요</span>':d>0?'<strong>▲ '+d+'</strong> <span>%p 늘었어요</span>':'<strong>＝ 0</strong> <span>%p 그대로예요</span>';
+    const rows=bs.slice().reverse().map(b=>'<tr'+(b.n?'':' class="none"')+'><td>'+b.long+'</td><td>'+(b.n?b.n:'—')+'</td><td>'+(b.n?b.w:'—')+'</td><td>'+(b.n?Math.round(b.rate)+'%':'—')+'</td></tr>').join('');
+    body='<div class="stats"><div class="stat w"><small>이 기간 오답률</small><strong>'+Math.round(tot.rate)+'</strong> <span>%</span><div class="sub">'+tot.n+'문제 중 '+tot.w+'개 틀림</div></div>'
+      +'<div class="stat"><small>직전 기록 대비</small>'+trendHtml+'</div></div>'
+      +'<div><h2 class="sec">오답률 변화</h2><p class="sub">낮을수록 잘하고 있는 거예요. 그래프를 누르거나 올려 보면 값이 나와요.</p></div>'
+      +'<div class="chart" id="chart"></div>'
+      +'<div class="tablewrap"><table class="tbl"><caption class="sr">'+cap+' 오답률 표</caption><thead><tr><th scope="col">기간</th><th scope="col">푼 문제</th><th scope="col">틀린 문제</th><th scope="col">오답률</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  }
+  return '<div class="card"><h1 class="title" style="font-size:clamp(28px,5vw,36px)">내 기록</h1>'+tabs+'<p class="sub" style="margin-top:-8px">'+cap+'</p>'+saveWarn()+body
+   +'<div class="btns"><button class="btn" data-act="home">처음 화면</button></div></div>';
+}
+let rzId=0;
+function drawChart(){
+  const host=document.getElementById('chart');if(!host)return;
+  const bs=buckets(s.log,s.unit,new Date()),n=bs.length,max=niceMax(bs);
+  const W=Math.max(280,host.clientWidth),H=W<480?240:280,L=40,R=16,T=30,B=30,pw=W-L-R,ph=H-T-B;
+  const X=i=>L+pw*(n===1?0.5:i/(n-1)),Y=r=>T+ph*(1-r/max);
+  let g='',p='',last=-1,prev=-1,run='';
+  for(let k=0;k<=4;k++){const v=max*k/4,y=Y(v);g+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+y+'" y2="'+y+'" stroke="var(--line)" stroke-width="1"/><text x="'+(L-8)+'" y="'+(y+4)+'" text-anchor="end" font-size="12" fill="var(--muted)">'+Math.round(v)+'%</text>'}
+  // 안 푼 날은 건너뛰고 푼 날끼리 선으로 잇는다(점은 실제로 푼 날에만 찍힌다).
+  bs.forEach((b,i)=>{
+    if(b.rate==null)return;
+    run+=(run?'L':'M')+X(i).toFixed(1)+' '+Y(b.rate).toFixed(1);prev=last;last=i;
+  });
+  if(run)p+='<path d="'+run+'" fill="none" stroke="var(--wrong-ink)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+  const step=Math.max(1,Math.ceil(44/(pw/Math.max(n-1,1))));
+  let dots='',xl='';
+  bs.forEach((b,i)=>{
+    if(b.rate!=null)dots+='<circle cx="'+X(i).toFixed(1)+'" cy="'+Y(b.rate).toFixed(1)+'" r="'+(i===last?5:4.5)+'" fill="var(--wrong-ink)" stroke="var(--surface)" stroke-width="2"/>';
+    if((n-1-i)%step===0)xl+='<text x="'+X(i).toFixed(1)+'" y="'+(H-8)+'" text-anchor="middle" font-size="12" fill="var(--muted)">'+b.label+'</text>';
+  });
+  let end='';
+  if(last>=0){const ex=X(last),ey=Y(bs[last].rate);
+    // 직전 점이 위에서 내려오면 라벨은 아래, 아니면 위에 둬서 선과 겹치지 않게 한다
+    const below=prev>=0&&Y(bs[prev].rate)<ey&&ey+22<=T+ph;
+    end='<text x="'+ex.toFixed(1)+'" y="'+(below?ey+22:ey-12).toFixed(1)+'" text-anchor="'+(ex>W-30?'end':'middle')+'" font-size="14" font-weight="700" fill="var(--fg)">'+Math.round(bs[last].rate)+'%</text>'}
+  host.innerHTML='<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="오답률 변화 그래프. 자세한 값은 아래 표에 있어요.">'
+    +g+'<line id="xh" x1="0" x2="0" y1="'+T+'" y2="'+(T+ph)+'" stroke="var(--line2)" stroke-width="1" visibility="hidden"/>'+p+dots+end
+    +'<circle id="hl" r="8" fill="none" stroke="var(--wrong-ink)" stroke-width="2" visibility="hidden"/>'+xl+'</svg>';
+  const tip=document.createElement('div');tip.className='tip';tip.hidden=true;
+  const tv=document.createElement('b'),tl=document.createElement('span'),tn=document.createElement('span');
+  tip.append(tv,tl,tn);host.append(tip);
+  const svg=host.firstChild,xh=svg.querySelector('#xh'),hl=svg.querySelector('#hl');
+  function show(e){
+    const r=svg.getBoundingClientRect();
+    const px=(e.clientX-r.left)*(W/r.width); // CSS로 줄어든 경우에도 그림 좌표로 환산
+    const i=Math.min(n-1,Math.max(0,Math.round((px-L)/(pw/Math.max(n-1,1)))));
+    const b=bs[i],x=X(i);
+    xh.setAttribute('x1',x);xh.setAttribute('x2',x);xh.setAttribute('visibility','visible');
+    tv.textContent=b.n?Math.round(b.rate)+'%':'기록 없음';
+    tl.textContent=b.long;tn.textContent=b.n?'푼 문제 '+b.n+'개 · 틀린 문제 '+b.w+'개':'';
+    tip.hidden=false;
+    let ty=T;
+    if(b.rate!=null){const y=Y(b.rate);hl.setAttribute('cx',x);hl.setAttribute('cy',y);hl.setAttribute('visibility','visible');
+      ty=y<T+ph/2?y+16:y-tip.offsetHeight-16}else hl.setAttribute('visibility','hidden');
+    tip.style.top=Math.max(0,ty)+'px';
+    tip.style.left=Math.min(W-tip.offsetWidth/2,Math.max(tip.offsetWidth/2,x))+'px';
+  }
+  function hide(){xh.setAttribute('visibility','hidden');hl.setAttribute('visibility','hidden');tip.hidden=true}
+  svg.addEventListener('pointermove',show);svg.addEventListener('pointerdown',show);
+  svg.addEventListener('pointerleave',hide);svg.addEventListener('pointercancel',hide);
+}
+window.addEventListener('resize',()=>{if(s.screen==='stats'){cancelAnimationFrame(rzId);rzId=requestAnimationFrame(drawChart)}});
 
 function render(){
   const parsed=parse(s.text),draftLen=parse(s.draft).length,c=coach(parsed.length,draftLen);
-  const chip=s.screen==='quiz'||s.screen==='result'?'정답 '+s.score+'개':'단어 '+parsed.length+'개';
-  const main=s.screen==='start'?startView(parsed):s.screen==='edit'?editView():s.screen==='quiz'?quizView():resultView();
+  const chip=s.screen==='quiz'||s.screen==='result'?'정답 '+s.score+'개':s.screen==='stats'?'내 기록':'단어 '+parsed.length+'개';
+  const main=s.screen==='start'?startView(parsed):s.screen==='edit'?editView():s.screen==='quiz'?quizView():s.screen==='stats'?statsView():resultView();
   app.innerHTML='<header class="bar"><div class="bar-in"><div class="brand">'+SPARK+'<span>Word Cafe</span></div><span class="chip"><span class="dot"></span>'+chip+'</span></div></header>'
    +'<main class="page"><div class="grid"><section>'+main+'</section>'
    +'<aside class="coach"><div class="bubble" aria-live="polite"><b>클로드</b><span id="coach-text">'+esc(c.text)+'</span></div>'+mascot(c.mood)+'</aside></div></main>';
   if(s.screen==='edit')updateDraft(true);
+  if(s.screen==='stats')drawChart();
   if(s.screen==='quiz'&&s.picked>=0){const n=document.getElementById('next');if(n)n.scrollIntoView({block:'nearest',behavior:'smooth'})}
 }
 function updateDraft(fromRender){
@@ -377,6 +477,7 @@ function pick(k){
   if(!ok&&wrong.indexOf(key)<0)wrong=wrong.concat([key]);
   if(ok&&q.wasWrong)wrong=wrong.filter(x=>x!==key);
   store.set('wc_wrong',JSON.stringify(wrong));
+  recordAnswer(s.log,dayKey(new Date()),!ok);store.set('wc_log',JSON.stringify(s.log));
   s.wrong=wrong;s.picked=k;
   if(ok)s.score++;else s.missed.push(q.wi);
   if(ok&&q.wasWrong)s.fixed.push(q.wi);
@@ -395,6 +496,8 @@ app.addEventListener('click',e=>{
   const a=b.dataset.act;
   if(a==='start')start();
   else if(a==='pick')pick(+b.dataset.k);
+  else if(a==='stats'){s.screen='stats';render();window.scrollTo(0,0)}
+  else if(a==='unit'){s.unit=b.dataset.val;render()}
   else if(a==='cfg'){s.cfg[b.dataset.key]=+b.dataset.val;store.set('wc_cfg',JSON.stringify(s.cfg));render()}
   else if(a==='hint'){s.hint=true;render()}
   else if(a==='next')next();

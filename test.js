@@ -1,6 +1,74 @@
 // 실행: node test.js
 const assert = require('assert');
-const { parse, blankWord, buildQuiz, autoNext, timedOut } = require('./lib.js');
+const { parse, blankWord, buildQuiz, autoNext, timedOut, dayKey, recordAnswer, sanitizeLog, buckets, totals, trend, niceMax } = require('./lib.js');
+
+// ---- 학습 기록(오답률) ----
+assert.strictEqual(dayKey(new Date(2026, 0, 5)), '2026-01-05');
+let lg = {};
+recordAnswer(lg, '2026-10-27', true);
+recordAnswer(lg, '2026-10-27', false);
+assert.deepStrictEqual(lg['2026-10-27'], { n: 2, w: 1 });
+assert.deepStrictEqual(sanitizeLog({ '2026-10-27': { n: 5, w: 2 }, bad: { n: 1, w: 0 }, '2026-10-26': { n: 2, w: 3 }, '2026-10-25': { n: 'x', w: 1 } }), { '2026-10-27': { n: 5, w: 2 } });
+assert.deepStrictEqual(sanitizeLog(null), {});
+// 손상된 저장값: 문자열 숫자(사전순 비교 함정), 소수, null, 존재하지 않는 날짜
+assert.deepStrictEqual(sanitizeLog({ '2026-10-27': { n: '2', w: '10' } }), {});
+assert.deepStrictEqual(sanitizeLog({ '2026-10-27': { n: 2.5, w: 1 } }), {});
+assert.deepStrictEqual(sanitizeLog({ '2026-10-27': { n: null, w: null }, '2026-10-26': { n: true, w: false } }), {});
+assert.deepStrictEqual(sanitizeLog({ '2026-02-30': { n: 5, w: 1 }, '2026-99-99': { n: 5, w: 1 }, '2026-13-01': { n: 5, w: 1 } }), {});
+assert.deepStrictEqual(sanitizeLog({ '2028-02-29': { n: 5, w: 1 } }), { '2028-02-29': { n: 5, w: 1 } }); // 윤년은 허용
+assert.deepStrictEqual(sanitizeLog({ '2027-02-29': { n: 5, w: 1 } }), {}); // 평년은 거부
+assert.deepStrictEqual(sanitizeLog([1, 2]), {});
+
+// 경계: 윤년 2월, 연말·연초 주, 일요일/월요일
+let bb = buckets({}, 'day', new Date(2028, 2, 1));
+assert.strictEqual(bb[12].label, '2/29'); assert.strictEqual(bb[13].label, '3/1');
+bb = buckets({ '2026-01-01': { n: 4, w: 2 }, '2025-12-29': { n: 6, w: 1 } }, 'week', new Date(2026, 0, 2)); // 금요일
+assert.strictEqual(bb[7].label, '12/29'); assert.deepStrictEqual([bb[7].n, bb[7].w], [10, 3]);
+assert.strictEqual(buckets({}, 'week', new Date(2026, 10, 1))[7].label, '10/26'); // 일요일 → 그 주 월요일
+assert.strictEqual(buckets({}, 'week', new Date(2026, 9, 26))[7].label, '10/26'); // 월요일 → 오늘
+assert.strictEqual(buckets({ '2026-10-26': { n: 5, w: 0 } }, 'day', new Date(2026, 9, 26))[13].rate, 0); // 전부 맞힘은 0%이지 기록 없음이 아니다
+// 일광절약시간 전환 주변에서도 날짜가 하루씩 이어진다
+bb = buckets({}, 'day', new Date(2026, 2, 10));
+assert.strictEqual(new Set(bb.map((x) => x.label)).size, 14);
+assert.strictEqual(bb[13].label, '3/10'); assert.strictEqual(bb[0].label, '2/25');
+
+const NOW = new Date(2026, 9, 27); // 2026-10-27 화요일
+const L = {
+  '2026-10-27': { n: 10, w: 2 }, '2026-10-26': { n: 10, w: 5 },
+  '2026-10-25': { n: 4, w: 1 }, '2026-10-02': { n: 6, w: 3 }, '2026-09-30': { n: 5, w: 5 }
+};
+let b = buckets(L, 'day', NOW);
+assert.strictEqual(b.length, 14);
+assert.strictEqual(b[13].label, '10/27'); assert.strictEqual(b[0].label, '10/14');
+assert.strictEqual(b[13].rate, 20); assert.strictEqual(b[12].rate, 50);
+assert.strictEqual(b[10].n, 0); assert.strictEqual(b[10].rate, null);
+
+b = buckets(L, 'week', NOW);
+assert.strictEqual(b.length, 8);
+assert.strictEqual(b[7].label, '10/26');
+assert.deepStrictEqual([b[7].n, b[7].w, b[7].rate], [20, 7, 35]); // 월·화만, 일요일(10/25)은 전 주
+assert.deepStrictEqual([b[6].n, b[6].w], [4, 1]);
+
+b = buckets(L, 'month', NOW);
+assert.strictEqual(b.length, 6);
+assert.strictEqual(b[5].label, '10월'); assert.strictEqual(b[0].label, '5월');
+assert.deepStrictEqual([b[5].n, b[5].w], [30, 11]);
+assert.deepStrictEqual([b[4].n, b[4].w], [5, 5]);
+// 해가 바뀌는 달
+b = buckets({ '2025-12-31': { n: 3, w: 1 } }, 'month', new Date(2026, 0, 15));
+assert.strictEqual(b[5].label, '1월'); assert.strictEqual(b[4].long, '2025년 12월'); assert.strictEqual(b[4].n, 3);
+
+b = buckets(L, 'day', NOW);
+assert.strictEqual(totals(b).n, 24); assert.strictEqual(totals(b).w, 8);
+assert.strictEqual(totals(buckets({}, 'day', NOW)).rate, null);
+// 직전 기록 대비: 마지막 두 "기록 있는" 구간의 오답률 차이
+const t = trend(b);
+assert.strictEqual(Math.round(t.diff), -30); // 20% - 50%
+assert.strictEqual(trend(buckets({ '2026-10-27': { n: 1, w: 0 } }, 'day', NOW)), null);
+assert.strictEqual(niceMax([]), 20);
+assert.strictEqual(niceMax([{ rate: 18 }, { rate: null }]), 20);
+assert.strictEqual(niceMax([{ rate: 21 }]), 40);
+assert.strictEqual(niceMax([{ rate: 100 }]), 100);
 
 // 시간 초과: 마감이 지난 뒤 클릭은 정답이어도 초과 처리 (타이머 없음 = 0초는 해당 없음)
 assert.strictEqual(timedOut(10, 1000, 999), false);

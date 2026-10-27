@@ -85,7 +85,93 @@
   // 정답이면 자동으로 넘어가고, 오답과 시간 초과는 직접 넘긴다.
   function autoNext(picked, cpos) { return picked === cpos; }
 
-  var api = { parse: parse, blankWord: blankWord, buildQuiz: buildQuiz, shuffle: shuffle, autoNext: autoNext, timedOut: timedOut };
+  // ---- 학습 기록: 날짜별 {n: 푼 문제, w: 틀린 문제} ----
+  var DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+  var DOW = ['일', '월', '화', '수', '목', '금', '토'];
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function dayKey(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+
+  function recordAnswer(log, key, isWrong) {
+    var e = log[key] || (log[key] = { n: 0, w: 0 });
+    e.n++;
+    if (isWrong) e.w++;
+    return log;
+  }
+
+  // 저장돼 있던 값이 망가져도 앱이 죽지 않게, 형식이 맞는 날짜만 남긴다.
+  function sanitizeLog(raw) {
+    var out = {};
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+    Object.keys(raw).forEach(function (k) {
+      var e = raw[k];
+      if (!DAY_RE.test(k) || !realDate(k) || !e) return;
+      // 숫자 형식 그대로의 정수만 받는다. 문자열 "10" <= "2" 같은 사전순 비교로 100%를 넘기는 걸 막는다.
+      if (Number.isSafeInteger(e.n) && Number.isSafeInteger(e.w) && e.w >= 0 && e.w <= e.n) out[k] = { n: e.n, w: e.w };
+    });
+    return out;
+  }
+
+  // 2026-02-30 처럼 달력에 없는 날짜를 거른다.
+  function realDate(key) {
+    var p = key.split('-'), d = new Date(+p[0], +p[1] - 1, +p[2]);
+    return d.getFullYear() === +p[0] && d.getMonth() === +p[1] - 1 && d.getDate() === +p[2];
+  }
+
+  function sumDays(log, start, days) {
+    var n = 0, w = 0;
+    for (var i = 0; i < days; i++) {
+      var e = log[dayKey(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i))];
+      if (e) { n += e.n; w += e.w; }
+    }
+    return { n: n, w: w, rate: n ? w / n * 100 : null };
+  }
+
+  // 일별 14일 / 주별 8주(월요일 시작) / 월별 6개월. 오래된 구간이 앞.
+  function buckets(log, unit, now) {
+    var y = now.getFullYear(), m = now.getMonth(), d = now.getDate(), out = [], i;
+    function md(dt) { return (dt.getMonth() + 1) + '/' + dt.getDate(); }
+    if (unit === 'week') {
+      var monday = d - ((now.getDay() + 6) % 7);
+      for (i = 7; i >= 0; i--) {
+        var s = new Date(y, m, monday - 7 * i), e = new Date(y, m, monday - 7 * i + 6), t = sumDays(log, s, 7);
+        out.push({ label: md(s), long: md(s) + ' ~ ' + md(e), n: t.n, w: t.w, rate: t.rate });
+      }
+    } else if (unit === 'month') {
+      for (i = 5; i >= 0; i--) {
+        var f = new Date(y, m - i, 1), t2 = sumDays(log, f, new Date(f.getFullYear(), f.getMonth() + 1, 0).getDate());
+        out.push({ label: (f.getMonth() + 1) + '월', long: f.getFullYear() + '년 ' + (f.getMonth() + 1) + '월', n: t2.n, w: t2.w, rate: t2.rate });
+      }
+    } else {
+      for (i = 13; i >= 0; i--) {
+        var dt = new Date(y, m, d - i), t3 = sumDays(log, dt, 1);
+        out.push({ label: md(dt), long: md(dt) + ' (' + DOW[dt.getDay()] + ')', n: t3.n, w: t3.w, rate: t3.rate });
+      }
+    }
+    return out;
+  }
+
+  function totals(bs) {
+    var n = 0, w = 0;
+    bs.forEach(function (b) { n += b.n; w += b.w; });
+    return { n: n, w: w, rate: n ? w / n * 100 : null };
+  }
+
+  // 기록이 있는 마지막 두 구간의 오답률 차이(음수면 좋아진 것)
+  function trend(bs) {
+    var has = bs.filter(function (b) { return b.n > 0; });
+    if (has.length < 2) return null;
+    var a = has[has.length - 2], b = has[has.length - 1];
+    return { diff: b.rate - a.rate, from: a, to: b };
+  }
+
+  // 세로축 최댓값: 20% 단위로 올림(최소 20). 값이 작아도 선이 납작해지지 않게 한다.
+  function niceMax(bs) {
+    var mx = 0;
+    bs.forEach(function (b) { if (b.rate != null && b.rate > mx) mx = b.rate; });
+    return Math.min(100, Math.max(20, Math.ceil(mx / 20) * 20));
+  }
+
+  var api = { dayKey: dayKey, recordAnswer: recordAnswer, sanitizeLog: sanitizeLog, buckets: buckets, totals: totals, trend: trend, niceMax: niceMax, parse: parse, blankWord: blankWord, buildQuiz: buildQuiz, shuffle: shuffle, autoNext: autoNext, timedOut: timedOut };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.WC = api;
 })(typeof window !== 'undefined' ? window : globalThis);
