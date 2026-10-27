@@ -1,6 +1,68 @@
 // 실행: node test.js
 const assert = require('assert');
-const { parse, blankWord, buildQuiz, autoNext, timedOut, dayKey, recordAnswer, sanitizeLog, buckets, totals, trend, niceMax } = require('./lib.js');
+const { parse, blankWord, buildQuiz, autoNext, timedOut, dayKey, recordAnswer, sanitizeLog, buckets, totals, trend, niceMax,
+  sanitizeCfg, makeBackup, parseBackup, checkAnswer, hintPattern, isCorrectTyped } = require('./lib.js');
+
+// ---- 주관식: 같은 뜻의 다른 단어도 정답으로 인정 ----
+const syn2 = [{ w: 'big', ko: '큰' }, { w: 'large', ko: '큰' }, { w: 'small', ko: '작은' }];
+assert.strictEqual(isCorrectTyped(syn2, 0, 'big'), true);
+assert.strictEqual(isCorrectTyped(syn2, 0, 'LARGE'), true); // 같은 뜻
+assert.strictEqual(isCorrectTyped(syn2, 0, 'small'), false); // 뜻이 다름
+assert.strictEqual(isCorrectTyped(syn2, 2, 'big'), false);
+assert.strictEqual(isCorrectTyped(syn2, 0, ''), false);
+
+// ---- 백업 입력 방어 ----
+let bw = parseBackup('{"app":"word-cafe","v":1,"words":"a, 가","wrong":["x","X","y"]}');
+assert.deepStrictEqual(bw.data.wrong, ['x', 'y']); // 중복 제거
+assert.strictEqual(parseBackup('{"app":"word-cafe","v":1,"words":"' + 'a'.repeat(2100000) + '"}').ok, false); // 너무 큰 입력은 파싱 전에 거부
+bw = parseBackup('{"app":"word-cafe","v":1,"words":"a, 가","wrong":' + JSON.stringify(Array.from({ length: 9000 }, (_, i) => 'w' + i)) + '}');
+assert.strictEqual(bw.data.wrong.length, 5000);
+
+// ---- 설정 ----
+assert.deepStrictEqual(sanitizeCfg(undefined), { count: 10, sec: 0, mode: 'choice', scope: 'all' });
+assert.deepStrictEqual(sanitizeCfg({ count: 50, sec: 20, mode: 'type', scope: 'wrong' }), { count: 50, sec: 20, mode: 'type', scope: 'wrong' });
+assert.deepStrictEqual(sanitizeCfg({ count: 7, sec: '5', mode: 'x', scope: 1 }), { count: 10, sec: 0, mode: 'choice', scope: 'all' });
+assert.deepStrictEqual(sanitizeCfg('garbage'), { count: 10, sec: 0, mode: 'choice', scope: 'all' });
+
+// ---- 주관식 채점 / 첫 글자 힌트 ----
+assert.strictEqual(checkAnswer('Abandon', 'abandon'), true);
+assert.strictEqual(checkAnswer('  abandon  ', 'abandon'), true);
+assert.strictEqual(checkAnswer('look   up', 'look up'), true);
+assert.strictEqual(checkAnswer('abandn', 'abandon'), false);
+assert.strictEqual(checkAnswer('', 'abandon'), false);
+assert.strictEqual(checkAnswer('   ', 'abandon'), false);
+assert.strictEqual(checkAnswer('don’t', "don't"), true); // 휴대폰 키보드의 둥근 따옴표
+assert.strictEqual(hintPattern('abandon'), 'a _ _ _ _ _ _');
+assert.strictEqual(hintPattern('look up'), 'l _ _ _ / _ _');
+assert.strictEqual(hintPattern("don't"), "d _ _ ' _");
+assert.strictEqual(hintPattern(''), '');
+
+// ---- 백업/복원 ----
+const bk = { words: 'abandon, 버리다 | He left.\ndeny, 부인하다', wrong: ['deny'], log: { '2026-10-27': { n: 5, w: 2 } }, cfg: { count: 30, sec: 20, mode: 'type', scope: 'wrong' } };
+const txt = makeBackup(bk, new Date(Date.UTC(2026, 9, 27)));
+let pb = parseBackup(txt);
+assert.strictEqual(pb.ok, true);
+assert.deepStrictEqual(pb.data, bk); // 한 바퀴 돌아도 그대로
+// 메신저가 앞뒤에 글을 붙여도 읽는다
+assert.strictEqual(parseBackup('백업입니다 👇\n' + txt + '\n끝').ok, true);
+assert.strictEqual(parseBackup('hello').ok, false);
+assert.strictEqual(parseBackup('').ok, false);
+assert.strictEqual(parseBackup('{"app":"other","v":1}').ok, false);
+assert.strictEqual(parseBackup('{"app":"word-cafe","v":2,"words":"a"}').ok, false);
+assert.strictEqual(parseBackup('{"app":"word-cafe","v":1,"words":123}').ok, false);
+// 일부가 망가져도 나머지는 살리고 앱이 죽지 않는다
+pb = parseBackup('{"app":"word-cafe","v":1,"words":"a, 가","wrong":[1,"Deny",null],"log":{"x":1},"cfg":{"count":99}}');
+assert.strictEqual(pb.ok, true);
+assert.deepStrictEqual(pb.data, { words: 'a, 가', wrong: ['deny'], log: {}, cfg: { count: 10, sec: 0, mode: 'choice', scope: 'all' } });
+
+// ---- 틀린 단어만 풀기 ----
+const ww = Array.from({ length: 20 }, (_, i) => ({ w: 'w' + i, ko: 'k' + i, ex: '' }));
+let oq = buildQuiz(ww, ['w2', 'w5', 'w9', 'nope'], 10, Math.random, true);
+assert.strictEqual(oq.length, 3); // 단어장에 있는 틀린 단어만
+assert.ok(oq.every((x) => x.wasWrong));
+oq.forEach((x) => { assert.strictEqual(x.opts.length, 4); assert.strictEqual(new Set(x.opts).size, 4); assert.strictEqual(x.opts[x.cpos], x.wi); });
+assert.strictEqual(buildQuiz(ww, ['w2', 'w5', 'w9', 'w1', 'w3'], 3, Math.random, true).length, 3); // 문제 수 상한
+assert.strictEqual(buildQuiz(ww, [], 10, Math.random, true).length, 0);
 
 // ---- 학습 기록(오답률) ----
 assert.strictEqual(dayKey(new Date(2026, 0, 5)), '2026-01-05');

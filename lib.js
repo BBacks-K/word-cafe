@@ -55,7 +55,7 @@
   }
 
   // 틀렸던 단어를 먼저 담고 나머지를 채운 뒤 섞는다. 방향(영→한, 한→영)은 문제마다 랜덤.
-  function buildQuiz(words, wrongKeys, total, rnd) {
+  function buildQuiz(words, wrongKeys, total, rnd, onlyWrong) {
     rnd = rnd || Math.random;
     var wset = Object.create(null);
     wrongKeys.forEach(function (k) { wset[k] = 1; });
@@ -63,7 +63,8 @@
     var isWrong = function (i) { return wset[words[i].w.toLowerCase()]; };
     var prior = shuffle(idx.filter(isWrong), rnd);
     var rest = shuffle(idx.filter(function (i) { return !isWrong(i); }), rnd);
-    var pick = shuffle(prior.concat(rest).slice(0, Math.min(total, words.length)), rnd);
+    // onlyWrong이면 틀렸던 단어만 낸다(보기에 쓰는 오답 단어는 전체 단어장에서 뽑는다)
+    var pick = shuffle((onlyWrong ? prior : prior.concat(rest)).slice(0, Math.min(total, words.length)), rnd);
     return pick.map(function (wi) {
       // 보기 문구가 겹치지 않게 뜻이 다른 단어로 채운다(동의어가 많아 모자라면 겹쳐도 채운다)
       var pool = shuffle(idx.filter(function (i) { return i !== wi; }), rnd);
@@ -171,7 +172,63 @@
     return Math.min(100, Math.max(20, Math.ceil(mx / 20) * 20));
   }
 
-  var api = { dayKey: dayKey, recordAnswer: recordAnswer, sanitizeLog: sanitizeLog, buckets: buckets, totals: totals, trend: trend, niceMax: niceMax, parse: parse, blankWord: blankWord, buildQuiz: buildQuiz, shuffle: shuffle, autoNext: autoNext, timedOut: timedOut };
+  // ---- 설정 / 주관식 / 백업 ----
+  function sanitizeCfg(c) {
+    c = c && typeof c === 'object' ? c : {};
+    return {
+      count: [10, 30, 50].indexOf(c.count) >= 0 ? c.count : 10,
+      sec: [0, 10, 20, 30, 60].indexOf(c.sec) >= 0 ? c.sec : 0,
+      mode: c.mode === 'type' ? 'type' : 'choice',
+      scope: c.scope === 'wrong' ? 'wrong' : 'all'
+    };
+  }
+
+  function normAnswer(t) { return String(t).replace(/[‘’]/g, "'").trim().toLowerCase().replace(/\s+/g, ' '); }
+  // 대소문자·앞뒤 공백·여러 칸 공백은 봐준다. 철자는 정확해야 한다.
+  function checkAnswer(input, word) {
+    var a = normAnswer(input);
+    return a !== '' && a === normAnswer(word);
+  }
+
+  // 뜻이 같은 다른 단어(big/large)를 쓴 것도 정답으로 본다. 문제 단어 words[wi]와 한글 뜻이 같은 단어가 대상이다.
+  function isCorrectTyped(words, wi, input) {
+    var target = words[wi];
+    return words.some(function (w) { return w === target || w.ko === target.ko ? checkAnswer(input, w.w) : false; });
+  }
+
+  // 첫 글자만 보여 주는 힌트: abandon → a _ _ _ _ _ _
+  function hintPattern(word) {
+    return Array.from(String(word)).map(function (ch, i) {
+      if (i === 0) return ch;
+      if (/[\p{L}\p{N}]/u.test(ch)) return '_';
+      return ch === ' ' ? '/' : ch;
+    }).join(' ');
+  }
+
+  function makeBackup(d, now) {
+    return JSON.stringify({ app: 'word-cafe', v: 1, savedAt: now.toISOString(), words: d.words, wrong: d.wrong, log: d.log, cfg: d.cfg }, null, 1);
+  }
+
+  // 붙여 넣은 글에서 { ... } 부분만 읽는다. 앞뒤에 메신저 문구가 붙어도 된다.
+  function parseBackup(text) {
+    var t = String(text), a = t.indexOf('{'), b = t.lastIndexOf('}'), o;
+    if (t.length > 2000000) return { ok: false, error: '내용이 너무 커요. Word Cafe 백업이 맞는지 확인해 주세요.' };
+    if (a < 0 || b <= a) return { ok: false, error: '백업 내용이 아니에요. 복사한 글이 잘리지 않았는지 확인해 주세요.' };
+    try { o = JSON.parse(t.slice(a, b + 1)); } catch (e) { return { ok: false, error: '백업 내용을 읽을 수 없어요. 복사한 글이 잘리지 않았는지 확인해 주세요.' }; }
+    if (!o || o.app !== 'word-cafe') return { ok: false, error: 'Word Cafe에서 만든 백업이 아니에요.' };
+    if (o.v !== 1) return { ok: false, error: '지원하지 않는 백업 버전이에요.' };
+    if (typeof o.words !== 'string' || o.words.length > 500000) return { ok: false, error: '백업 안의 단어장을 읽을 수 없어요.' };
+    var seen = Object.create(null), wrong = [];
+    (Array.isArray(o.wrong) ? o.wrong : []).forEach(function (k) {
+      if (typeof k !== 'string' || wrong.length >= 5000) return;
+      k = k.toLowerCase();
+      if (!k || k.length > 200 || seen[k]) return;
+      seen[k] = 1; wrong.push(k);
+    });
+    return { ok: true, data: { words: o.words, wrong: wrong, log: sanitizeLog(o.log), cfg: sanitizeCfg(o.cfg) } };
+  }
+
+  var api = { sanitizeCfg: sanitizeCfg, checkAnswer: checkAnswer, hintPattern: hintPattern, isCorrectTyped: isCorrectTyped, makeBackup: makeBackup, parseBackup: parseBackup, dayKey: dayKey, recordAnswer: recordAnswer, sanitizeLog: sanitizeLog, buckets: buckets, totals: totals, trend: trend, niceMax: niceMax, parse: parse, blankWord: blankWord, buildQuiz: buildQuiz, shuffle: shuffle, autoNext: autoNext, timedOut: timedOut };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.WC = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -141,6 +141,20 @@ textarea{width:100%;border:1.5px solid var(--line2);border-radius:12px;padding:1
 .timer.low,.timer.low b{color:var(--wrong-ink)}
 .fill.t{background:var(--clay);transition:none}
 .sub{color:var(--muted);font-size:14px}
+.qrow{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px}
+.spk{flex:none;width:44px;height:44px;border-radius:50%;border:1.5px solid var(--line2);background:var(--surface);color:var(--green-ink);display:inline-flex;align-items:center;justify-content:center;padding:0}
+.spk:hover{border-color:var(--green-ink)}
+.reveal{margin-top:12px;display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px}
+.reveal b{font:600 28px/1.2 var(--serif);overflow-wrap:anywhere}
+.ansform{display:flex;flex-wrap:wrap;gap:10px}
+.ans{flex:1 1 220px;min-width:0;min-height:56px;padding:0 16px;border:1.5px solid var(--line2);border-radius:14px;background:var(--surface);color:var(--fg);font:600 22px var(--serif)}
+.ans:disabled{background:var(--surface2);color:var(--muted)}
+.hintline{font:600 24px/1.4 var(--serif);letter-spacing:.1em;color:var(--muted);overflow-wrap:anywhere}
+.fb{font-weight:700;font-size:16px}
+.bk{font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;min-height:120px}
+.filebtn{display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+input.sr:focus-visible+*,input.sr:focus-visible{outline:none}
+label.filebtn:focus-within{outline:3px solid var(--green-ink);outline-offset:2px}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .chart{position:relative;width:100%}
 .chart svg{display:block;touch-action:pan-y;max-width:100%}
@@ -186,12 +200,13 @@ const EYES = {
 };
 const store = {
   get(k,d){try{const v=localStorage.getItem(k);return v==null?d:v}catch(e){return d}},
-  set(k,v){try{localStorage.setItem(k,v)}catch(e){storageFailed=true}}
+  set(k,v){try{localStorage.setItem(k,v);return true}catch(e){storageFailed=true;return false}}
 };
 let storageFailed=false;
 store.set('wc_probe','1'); // 저장이 막힌 브라우저(사생활 보호 모드 등)를 미리 알아챈다
 function saveWarn(){return storageFailed?'<p class="note" style="color:var(--wrong-ink);font-weight:500">이 브라우저에서는 단어장과 기록이 저장되지 않아요. 사생활 보호 모드이거나 저장 공간이 막혀 있을 수 있어요. 창을 닫으면 사라져요.</p>':''}
-const { parse, blankWord, buildQuiz, autoNext, timedOut, dayKey, recordAnswer, sanitizeLog, buckets, totals, trend, niceMax } = WC;
+const { parse, blankWord, buildQuiz, autoNext, timedOut, dayKey, recordAnswer, sanitizeLog, buckets, totals, trend, niceMax,
+  sanitizeCfg, makeBackup, parseBackup, checkAnswer, hintPattern, isCorrectTyped } = WC;
 const AUTO_MS = 5000; // 정답 후 자동으로 넘어가기까지
 let autoId = 0;
 function esc(t){return String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -199,12 +214,11 @@ function loadWrong(){try{const a=JSON.parse(store.get('wc_wrong','[]'));return A
 
 const saved0 = store.get('wc_words', SAMPLE);
 const text0 = saved0 === OLD_SAMPLE ? SAMPLE : saved0; // 예문 없는 옛 예시는 새 예시로 교체
-function loadCfg(){
-  try{const c=JSON.parse(store.get('wc_cfg','{}'));return {count:[10,30,50].indexOf(c.count)>=0?c.count:10,sec:[0,10,20,30,60].indexOf(c.sec)>=0?c.sec:0}}catch(e){return{count:10,sec:0}}
-}
+function loadCfg(){try{return sanitizeCfg(JSON.parse(store.get('wc_cfg','{}')))}catch(e){return sanitizeCfg()}}
+const WRONG_ANS = 98; // 주관식에서 틀린 답을 낸 경우(보기 번호 0~3, 시간 초과 99와 겹치지 않는 값)
 function loadLog(){try{return sanitizeLog(JSON.parse(store.get('wc_log','{}')))}catch(e){return{}}}
 const UNITS=[['day','하루','하루 단위 · 최근 14일'],['week','일주일','일주일 단위 · 최근 8주'],['month','한 달','한 달 단위 · 최근 6개월']];
-const s = {log:loadLog(),unit:'day',screen:'start',text:text0,draft:text0,wrong:loadWrong(),words:[],quiz:[],qi:0,picked:-1,score:0,hint:false,missed:[],fixed:[],cfg:loadCfg(),deadline:0};
+const s = {log:loadLog(),unit:'day',screen:'start',text:text0,draft:text0,wrong:loadWrong(),words:[],quiz:[],qi:0,picked:-1,score:0,hint:false,missed:[],fixed:[],cfg:loadCfg(),deadline:0,typed:'',flash:'',bk:{text:'',armed:false}};
 let timerId = 0;
 const TIMEOUT = 99; // 시간 초과는 어떤 보기와도 겹치지 않는 값으로 기록한다
 const app = document.getElementById('app');
@@ -248,8 +262,11 @@ function coach(parsedLen,draftLen){
     if(r>=0.9){mood='happy';text='거의 완벽해요! 오늘 공부 제대로 했네요.'}
     else if(r>=0.6)text='좋아요. 틀린 단어는 저장해 뒀으니 다음에 다시 만나요.';
     else{mood='sad';text='괜찮아요, 틀린 단어는 제가 기억해 둘게요. 한 번 더 해 봐요.'}
+  }else if(s.screen==='backup'){
+    text='백업은 글로 복사해 두면 돼요. 메모장이나 카톡 "나에게 보내기"에 붙여 두세요.';
   }else if(!c.answered){
-    if(s.hint){mood='think';text='오답 두 개를 지워 줬어요. 이제 둘 중에 골라 봐요.'}
+    if(s.cfg.mode==='type')text=s.hint?'첫 글자를 알려 줬어요. 생각해서 써 봐요.':'영어 단어를 직접 써 봐요. 대소문자는 상관없어요.';
+    else if(s.hint){mood='think';text='오답 두 개를 지워 줬어요. 이제 둘 중에 골라 봐요.'}
     else text=c.q.wasWrong?'이 단어, 전에 틀렸던 거예요. 이번엔 맞혀 봐요.':'천천히 생각해 봐요. 막히면 힌트를 눌러요.';
   }else if(s.picked===TIMEOUT){
     mood='sad';text='시간이 다 됐어요. '+c.word.w+' = '+c.word.ko+'. 저장해 둘게요, 다음 시험에 또 나와요.';
@@ -261,27 +278,46 @@ function coach(parsedLen,draftLen){
   return {text,mood};
 }
 
-function seg(label,key,vals,fmt){
+function seg(label,key,vals,fmt,off,cur){
+  const now=cur===undefined?s.cfg[key]:cur;
   return '<div class="set"><div class="lbl">'+label+'</div><div class="seg" role="group" aria-label="'+label+'">'
-   +vals.map(v=>'<button class="segb" data-act="cfg" data-key="'+key+'" data-val="'+v+'" aria-pressed="'+(s.cfg[key]===v)+'">'+fmt(v)+'</button>').join('')+'</div></div>';
+   +vals.map(v=>'<button class="segb" data-act="cfg" data-key="'+key+'" data-val="'+v+'" aria-pressed="'+(now===v)+'"'+(off&&off(v)?' disabled':'')+'>'+fmt(v)+'</button>').join('')+'</div></div>';
+}
+// 틀린 단어가 하나도 없으면 "틀린 단어만"은 쓸 수 없으니 전체로 본다
+function effScope(){return s.cfg.scope==='wrong'&&savedWrongList().length?'wrong':'all'}
+function speakBtn(text){
+  if(!('speechSynthesis' in window))return '';
+  return '<button class="spk" data-act="speak" data-text="'+esc(text)+'" aria-label="발음 듣기"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>';
+}
+function speak(text){
+  try{const ss=window.speechSynthesis;ss.cancel();const u=new SpeechSynthesisUtterance(text);u.lang='en-US';u.rate=0.9;ss.speak(u)}catch(e){}
 }
 function startView(parsed){
-  const wl=savedWrongList(), few=parsed.length<4;
+  const wl=savedWrongList(), few=parsed.length<4, scope=effScope();
+  const avail=scope==='wrong'?wl.length:parsed.length, nq=Math.min(s.cfg.count,avail);
   return '<div class="card">'
    +'<span class="eyebrow">VOCABULARY TEST</span>'
    +'<h1 class="title">오늘의 단어,<br>한 번 풀어볼까요?</h1>'
    +'<p class="lead">영어 단어를 보고 뜻을 고르거나, 뜻을 보고 영어 단어를 고르는 문제가 섞여서 나와요. 틀린 단어는 저장해 두었다가 다음 시험에 먼저 다시 나옵니다.</p>'
+   +(s.flash?'<p class="note" style="color:var(--green-ink);font-weight:700" role="status">'+esc(s.flash)+'</p>':'')
    +saveWarn()
    +(s.text===SAMPLE?'<p class="note">지금은 예시 단어 10개가 들어 있어요. "단어장 편집"에서 내 단어로 바꿔 주세요.</p>':'')
    +'<div class="stats"><div class="stat"><small>내 단어장</small><strong>'+parsed.length+'</strong> <span>개</span></div>'
    +'<div class="stat w"><small>틀렸던 단어 (저장됨)</small><strong>'+wl.length+'</strong> <span>개</span></div></div>'
    +(wl.length?'<div class="rows">'+wl.map(w=>'<div class="row"><span class="tag">틀렸던 단어</span><span class="en">'+esc(w.w)+'</span><span class="ko">'+esc(w.ko)+'</span></div>').join('')+'</div>':'')
    +(few?'<p class="warn">시험을 보려면 단어가 4개 이상 필요해요. 단어장을 먼저 채워 주세요.</p>':'')
-   +'<div class="sets">'+seg('문제 수','count',[10,30,50],v=>v+'문제')+seg('문제당 제한 시간','sec',[0,10,20,30,60],v=>v?v+'초':'없음')+'</div>'
-   +(!few&&parsed.length<s.cfg.count?'<p class="note">단어장에 단어가 '+parsed.length+'개라서 '+parsed.length+'문제만 나와요.</p>':'')
+   +'<div class="sets">'
+   +seg('풀이 방식','mode',['choice','type'],v=>v==='type'?'직접 쓰기':'보기 고르기')
+   +seg('출제 범위','scope',['all','wrong'],v=>v==='wrong'?'틀린 단어만':'전체',v=>v==='wrong'&&!wl.length,scope)
+   +seg('문제 수','count',[10,30,50],v=>v+'문제')
+   +seg('문제당 제한 시간','sec',[0,10,20,30,60],v=>v?v+'초':'없음')+'</div>'
+   +(s.cfg.mode==='type'?'<p class="note">직접 쓰기는 한글 뜻을 보고 영어 단어를 써요. 철자가 정확해야 정답이고, 대소문자는 상관없어요.</p>':'')
+   +(s.cfg.scope==='wrong'&&!wl.length?'<p class="note">틀렸던 단어가 없어서 이번에는 전체 단어에서 나와요.</p>':'')
+   +(scope==='wrong'?'<p class="note">틀렸던 단어 '+wl.length+'개 중에서 '+nq+'문제가 나와요.</p>':!few&&parsed.length<s.cfg.count?'<p class="note">단어장에 단어가 '+parsed.length+'개라서 '+parsed.length+'문제만 나와요.</p>':'')
    +'<div class="btns"><button class="btn" data-act="start"'+(few?' disabled':'')+'>시험 시작하기</button>'
    +'<button class="btn ghost" data-act="edit">단어장 편집</button>'
-   +'<button class="btn ghost" data-act="stats">내 기록</button></div>'
+   +'<button class="btn ghost" data-act="stats">내 기록</button>'
+   +'<button class="btn ghost" data-act="backup">백업·복원</button></div>'
    +'<p class="note">단어장과 틀린 단어 기록은 지금 쓰는 기기와 브라우저에만 저장돼요.</p></div>';
 }
 function editView(){
@@ -296,9 +332,17 @@ function editView(){
    +'<button class="btn ghost sm" data-act="copy" id="copy">목록 복사</button>'
    +'<button class="btn link" data-act="clearwrong" style="margin-left:auto">틀린 단어 기록 비우기</button></div></div>';
 }
+function typedForm(c){
+  const right=c.answered&&s.picked===c.q.cpos;
+  return '<form id="ans-form" class="ansform" autocomplete="off"><label class="sr" for="ans-input">영어 단어 입력</label>'
+   +'<input id="ans-input" class="ans" type="text" value="'+esc(s.typed)+'" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done" placeholder="영어 단어"'+(c.answered?' disabled':'')+'>'
+   +'<button class="btn sm" type="submit"'+(c.answered?' disabled':'')+'>확인</button></form>'
+   +(s.hint&&!c.answered?'<div class="hintline" aria-live="polite">'+esc(hintPattern(c.word.w))+'</div>':'')
+   +(c.answered?(right?'<div class="fb" style="color:var(--green-ink)">✓ 정답이에요'+(checkAnswer(s.typed,c.word.w)?'':' (뜻이 같은 다른 단어도 인정해요)')+'</div>':s.picked===TIMEOUT?'':'<div class="fb" style="color:var(--wrong-ink)">✗ 내 답: '+esc(s.typed.trim()||'(비움)')+'</div>'):'');
+}
 function quizView(){
-  const c=cur(),q=c.q,total=s.quiz.length,hidden={};
-  if(s.hint&&!c.answered){let n=0;q.opts.forEach((o,k)=>{if(k!==q.cpos&&n<2){hidden[k]=1;n++}})}
+  const c=cur(),q=c.q,total=s.quiz.length,hidden={},typed=s.cfg.mode==='type';
+  if(s.hint&&!c.answered&&!typed){let n=0;q.opts.forEach((o,k)=>{if(k!==q.cpos&&n<2){hidden[k]=1;n++}})}
   const opts=q.opts.map((wi,k)=>{
     const w=s.words[wi],label=c.en2ko?w.ko:w.w;
     let cls='opt'+(c.en2ko?'':' en'),mark='';
@@ -316,14 +360,31 @@ function quizView(){
   return '<div style="display:flex;flex-direction:column;gap:16px">'
    +'<div class="prog"><div class="prog-top"><b>문제 '+(s.qi+1)+' / '+total+'</b><span>정답 '+s.score+'개</span></div>'
    +'<div class="track" role="progressbar" aria-valuemin="0" aria-valuemax="'+total+'" aria-valuenow="'+(s.qi+(c.answered?1:0))+'" aria-label="진행도"><div class="fill" style="width:'+pct+'%"></div></div>'+timer+'</div>'
-   +'<div class="card"><div><div class="qhead"><span>'+(c.en2ko?'이 단어의 뜻은?':'이 뜻에 맞는 영어 단어는?')+'</span>'
+   +'<div class="card"><div><div class="qhead"><span>'+(c.en2ko?'이 단어의 뜻은?':typed?'이 뜻에 맞는 영어 단어를 써 보세요':'이 뜻에 맞는 영어 단어는?')+'</span>'
    +(q.wasWrong?'<span class="tag" style="font-size:13px;padding:3px 12px">틀렸던 단어</span>':'')+'</div>'
-   +'<div class="'+(c.en2ko?'q-en':'q-ko')+'" style="margin-top:8px">'+esc(c.en2ko?c.word.w:c.word.ko)+'</div>'
-   +(exText?'<p class="ex"><span class="exl">예문</span>'+esc(exText)+'</p>':'')+'</div>'
-   +'<div class="opts">'+opts+'</div>'
-   +'<div class="actions"><button class="btn hint" data-act="hint"'+(s.hint||c.answered?' disabled':'')+'>'+(s.hint?'힌트 사용함':'힌트 (오답 2개 지우기)')+'</button>'
+   +'<div class="qrow" style="margin-top:8px"><div class="'+(c.en2ko?'q-en':'q-ko')+'">'+esc(c.en2ko?c.word.w:c.word.ko)+'</div>'+(c.en2ko?speakBtn(c.word.w):'')+'</div>'
+   +(exText?'<p class="ex"><span class="exl">예문</span>'+esc(exText)+'</p>':'')
+   +(c.answered&&!c.en2ko?'<div class="reveal"><span class="exl">정답</span><b>'+esc(c.word.w)+'</b>'+speakBtn(c.word.w)+'</div>':'')+'</div>'
+   +(typed?typedForm(c):'<div class="opts">'+opts+'</div>')
+   +'<div class="actions"><button class="btn hint" data-act="hint"'+(s.hint||c.answered?' disabled':'')+'>'+(s.hint?'힌트 사용함':typed?'힌트 (첫 글자 보기)':'힌트 (오답 2개 지우기)')+'</button>'
    +(c.answered?'<button id="next" class="btn sm" data-act="next">'+nextLabel()+'</button>':'')+'</div></div></div>';
 }
+function backupView(){
+  const out=makeBackup({words:s.text,wrong:s.wrong,log:s.log,cfg:s.cfg},new Date());
+  return '<div class="card"><h1 class="title" style="font-size:clamp(28px,5vw,36px)">백업·복원</h1>'
+   +'<p class="lead" style="font-size:15px">단어장, 틀린 단어, 기록, 설정을 글 한 덩어리로 저장해 둘 수 있어요. 기기를 바꾸거나 브라우저 데이터를 지우기 전에 백업해 두세요.</p>'
+   +saveWarn()
+   +'<div><h2 class="sec">1. 백업 만들기</h2><p class="sub">아래 글을 복사해서 메모장이나 메신저에 붙여 두세요. 파일로 저장해도 돼요.</p></div>'
+   +'<label class="sr" for="bk-out">백업 내용</label><textarea id="bk-out" class="bk" readonly rows="6" spellcheck="false">'+esc(out)+'</textarea>'
+   +'<div class="btns"><button class="btn sm" data-act="bkcopy" id="bkcopy">복사하기</button><button class="btn ghost sm" data-act="bkfile">파일로 저장</button></div>'
+   +'<div><h2 class="sec">2. 복원하기</h2><p class="sub">저장해 둔 글을 붙여 넣거나 파일을 불러온 뒤 "복원하기"를 누르세요. 지금 있는 단어장과 기록은 백업 내용으로 바뀌어요.</p></div>'
+   +'<label class="sr" for="bk-in">복원할 백업 내용</label><textarea id="bk-in" class="bk" rows="6" spellcheck="false" placeholder="여기에 백업 내용을 붙여 넣으세요">'+esc(s.bk.text)+'</textarea>'
+   +'<div class="btns"><button class="btn sm" data-act="bkrestore" id="bkrestore">복원하기</button>'
+   +'<label class="btn ghost sm filebtn" for="bk-file">파일 불러오기</label><input id="bk-file" class="sr" type="file" accept=".json,.txt,application/json,text/plain"></div>'
+   +'<div id="bk-msg" class="msg" role="status"></div>'
+   +'<div class="btns"><button class="btn ghost" data-act="home">처음 화면</button></div></div>';
+}
+function bkMsg(text,ok){const m=document.getElementById('bk-msg');if(m){m.textContent=text;m.className='msg '+(ok?'ok':'no')}}
 function resultView(){
   const total=s.quiz.length;
   const list=(a,ok)=>'<div class="rows">'+a.map(i=>'<div class="row'+(ok?' ok':'')+'"><span class="tag'+(ok?' ok':'')+'">'+(ok?'복습 성공':'틀렸던 단어')+'</span><span class="en">'+esc(s.words[i].w)+'</span><span class="ko">'+esc(s.words[i].ko)+'</span></div>').join('')+'</div>';
@@ -408,14 +469,16 @@ window.addEventListener('resize',()=>{if(s.screen==='stats'){cancelAnimationFram
 
 function render(){
   const parsed=parse(s.text),draftLen=parse(s.draft).length,c=coach(parsed.length,draftLen);
-  const chip=s.screen==='quiz'||s.screen==='result'?'정답 '+s.score+'개':s.screen==='stats'?'내 기록':'단어 '+parsed.length+'개';
-  const main=s.screen==='start'?startView(parsed):s.screen==='edit'?editView():s.screen==='quiz'?quizView():s.screen==='stats'?statsView():resultView();
+  const chip=s.screen==='quiz'||s.screen==='result'?'정답 '+s.score+'개':s.screen==='stats'?'내 기록':s.screen==='backup'?'백업·복원':'단어 '+parsed.length+'개';
+  const main=s.screen==='start'?startView(parsed):s.screen==='edit'?editView():s.screen==='quiz'?quizView():s.screen==='stats'?statsView():s.screen==='backup'?backupView():resultView();
+  s.flash='';
   app.innerHTML='<header class="bar"><div class="bar-in"><div class="brand">'+SPARK+'<span>Word Cafe</span></div><span class="chip"><span class="dot"></span>'+chip+'</span></div></header>'
    +'<main class="page"><div class="grid"><section>'+main+'</section>'
    +'<aside class="coach"><div class="bubble" aria-live="polite"><b>클로드</b><span id="coach-text">'+esc(c.text)+'</span></div>'+mascot(c.mood)+'</aside></div></main>';
   if(s.screen==='edit')updateDraft(true);
   if(s.screen==='stats')drawChart();
-  if(s.screen==='quiz'&&s.picked>=0){const n=document.getElementById('next');if(n)n.scrollIntoView({block:'nearest',behavior:'smooth'})}
+  if(s.screen==='quiz'&&s.picked>=0){const n=document.getElementById('next');if(n){n.scrollIntoView({block:'nearest',behavior:'smooth'});if(s.cfg.mode==='type')n.focus({preventScroll:true})}}
+  if(s.screen==='quiz'&&s.picked<0&&s.cfg.mode==='type'){const i=document.getElementById('ans-input');if(i){i.focus({preventScroll:true});i.setSelectionRange(i.value.length,i.value.length)}}
 }
 function updateDraft(fromRender){
   const ta=document.getElementById('words-input');if(!ta)return;
@@ -464,8 +527,10 @@ function tick(){
 function start(){
   const words=parse(s.text);if(words.length<4)return;
   stopAuto();
-  const quiz=buildQuiz(words,s.wrong,s.cfg.count);
-  Object.assign(s,{screen:'quiz',words,quiz,qi:0,picked:-1,score:0,hint:false,missed:[],fixed:[]});
+  const quiz=buildQuiz(words,s.wrong,s.cfg.count,Math.random,effScope()==='wrong');
+  if(!quiz.length)return;
+  if(s.cfg.mode==='type')quiz.forEach(q=>{q.dir='ko2en'}); // 직접 쓰기는 한글 뜻 → 영어 단어만(한글 뜻은 정답이 여러 개라 채점할 수 없다)
+  Object.assign(s,{screen:'quiz',words,quiz,qi:0,picked:-1,score:0,hint:false,missed:[],fixed:[],typed:''});
   render();window.scrollTo(0,0);startTimer();
 }
 function pick(k){
@@ -485,10 +550,36 @@ function pick(k){
   render();
 }
 function next(){
+  if(s.screen!=='quiz'||s.picked<0)return; // 답하지 않은 문제를 건너뛰지 않는다
   stopAuto();
+  try{window.speechSynthesis.cancel()}catch(e){}
   if(s.qi>=s.quiz.length-1){s.screen='result';s.hint=false}
-  else{s.qi++;s.picked=-1;s.hint=false}
+  else{s.qi++;s.picked=-1;s.hint=false;s.typed=''}
   render();window.scrollTo(0,0);startTimer();
+}
+function submitTyped(){
+  const c=cur();
+  if(!c||s.picked>=0||!s.typed.trim())return;
+  pick(isCorrectTyped(s.words,c.q.wi,s.typed)?c.q.cpos:WRONG_ANS);
+}
+// 저장 4곳이 모두 성공해야 화면의 데이터를 바꾼다. 하나라도 실패하면 원래 값으로 되돌리고 false.
+function applyBackup(d){
+  const next={wc_words:d.words,wc_wrong:JSON.stringify(d.wrong),wc_log:JSON.stringify(d.log),wc_cfg:JSON.stringify(d.cfg)};
+  const old={wc_words:store.get('wc_words',null),wc_wrong:store.get('wc_wrong',null),wc_log:store.get('wc_log',null),wc_cfg:store.get('wc_cfg',null)};
+  const keys=Object.keys(next);
+  if(!keys.every(k=>store.set(k,next[k]))){
+    keys.forEach(k=>{if(old[k]!==null)store.set(k,old[k]);else try{localStorage.removeItem(k)}catch(e){}});
+    return false;
+  }
+  s.text=d.words;s.draft=d.words;s.wrong=d.wrong;s.log=d.log;s.cfg=d.cfg;
+  return true;
+}
+function saveFile(text){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([text],{type:'application/json'}));
+  a.download='word-cafe-backup-'+dayKey(new Date())+'.json';
+  document.body.append(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 }
 
 app.addEventListener('click',e=>{
@@ -498,8 +589,36 @@ app.addEventListener('click',e=>{
   else if(a==='pick')pick(+b.dataset.k);
   else if(a==='stats'){s.screen='stats';render();window.scrollTo(0,0)}
   else if(a==='unit'){s.unit=b.dataset.val;render()}
-  else if(a==='cfg'){s.cfg[b.dataset.key]=+b.dataset.val;store.set('wc_cfg',JSON.stringify(s.cfg));render()}
-  else if(a==='hint'){s.hint=true;render()}
+  else if(a==='cfg'){const v=b.dataset.val;s.cfg[b.dataset.key]=/^\d+$/.test(v)?+v:v;store.set('wc_cfg',JSON.stringify(s.cfg));render()}
+  else if(a==='speak')speak(b.dataset.text);
+  else if(a==='backup'){s.screen='backup';s.bk={text:'',armed:false};render();window.scrollTo(0,0)}
+  else if(a==='bkcopy'){
+    const ta=document.getElementById('bk-out');
+    const done=()=>{b.textContent='복사했어요'};
+    try{navigator.clipboard.writeText(ta.value).then(done,()=>{ta.select();bkMsg('복사가 막혀 있어요. 선택된 글을 직접 복사해 주세요.',false)})}catch(err){ta.select()}
+  }
+  else if(a==='bkfile'){saveFile(document.getElementById('bk-out').value);bkMsg('파일로 저장했어요. 다운로드 폴더를 확인해 주세요.',true)}
+  else if(a==='bkrestore'){
+    const r=parseBackup(document.getElementById('bk-in').value);
+    if(!r.ok){s.bk.armed=false;b.textContent='복원하기';bkMsg(r.error,false);return}
+    if(!s.bk.armed){
+      s.bk.armed=true;b.textContent='한 번 더 눌러 복원';
+      bkMsg('지금 단어장과 기록이 백업 내용(단어 '+parse(r.data.words).length+'개, 틀린 단어 '+r.data.wrong.length+'개, 기록 '+Object.keys(r.data.log).length+'일)으로 바뀌어요. 계속하려면 한 번 더 눌러 주세요.',false);
+      return;
+    }
+    if(!applyBackup(r.data)){s.bk.armed=false;b.textContent='복원하기';bkMsg('이 브라우저에 저장하지 못해서 복원하지 못했어요. 원래 데이터는 그대로예요.',false);return}
+    s.flash='복원했어요. 단어 '+parse(r.data.words).length+'개, 틀린 단어 '+r.data.wrong.length+'개.';
+    s.screen='start';render();window.scrollTo(0,0);
+  }
+  else if(a==='hint'){
+    s.hint=true;
+    if(s.cfg.mode!=='type'){render();return}
+    // 직접 쓰는 중에 화면을 통째로 다시 그리면 입력(키보드, 자동완성)이 끊기므로 힌트 줄만 붙인다
+    b.disabled=true;b.textContent='힌트 사용함';
+    const d=document.createElement('div');d.className='hintline';d.setAttribute('aria-live','polite');d.textContent=hintPattern(cur().word.w);
+    document.getElementById('ans-form').after(d);
+    document.getElementById('coach-text').textContent='첫 글자를 알려 줬어요. 생각해서 써 봐요.';
+  }
   else if(a==='next')next();
   else if(a==='home'||a==='cancel'){s.screen='start';render();window.scrollTo(0,0)}
   else if(a==='edit'){s.screen='edit';s.draft=s.text;render();window.scrollTo(0,0)}
@@ -511,7 +630,30 @@ app.addEventListener('click',e=>{
     try{navigator.clipboard.writeText(ta.value).then(done,()=>{ta.select()})}catch(err){ta.select()}
   }
 });
-app.addEventListener('input',e=>{if(e.target.id==='words-input')updateDraft(false)});
+app.addEventListener('input',e=>{
+  const id=e.target.id;
+  if(id==='words-input')updateDraft(false);
+  else if(id==='ans-input')s.typed=e.target.value;
+  else if(id==='bk-in'){ // 내용이 바뀌면 "한 번 더" 확인 단계를 처음으로 되돌린다
+    s.bk={text:e.target.value,armed:false};
+    const r=document.getElementById('bkrestore');if(r)r.textContent='복원하기';
+    bkMsg('',true);
+  }
+});
+app.addEventListener('submit',e=>{if(e.target.id==='ans-form'){e.preventDefault();submitTyped()}});
+app.addEventListener('change',e=>{
+  if(e.target.id!=='bk-file')return;
+  const f=e.target.files&&e.target.files[0];if(!f)return;
+  if(f.size>2000000){bkMsg('파일이 너무 커요. Word Cafe 백업 파일이 맞는지 확인해 주세요.',false);return}
+  const rd=new FileReader();
+  rd.onload=()=>{
+    const ta=document.getElementById('bk-in');if(!ta)return;
+    ta.value=String(rd.result);s.bk={text:ta.value,armed:false};
+    bkMsg('파일을 읽었어요. "복원하기"를 눌러 주세요.',true);
+  };
+  rd.onerror=()=>bkMsg('파일을 읽지 못했어요.',false);
+  rd.readAsText(f);
+});
 render();
 </script>
 </body>
