@@ -64,7 +64,10 @@
     });
   }
 
-  var api = { parse: parse, blankWord: blankWord, buildQuiz: buildQuiz, shuffle: shuffle };
+  // 정답이면 자동으로 넘어가고, 오답과 시간 초과는 직접 넘긴다.
+  function autoNext(picked, cpos) { return picked === cpos; }
+
+  var api = { parse: parse, blankWord: blankWord, buildQuiz: buildQuiz, shuffle: shuffle, autoNext: autoNext };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.WC = api;
 })(typeof window !== 'undefined' ? window : globalThis);

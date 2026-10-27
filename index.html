@@ -175,7 +175,9 @@ const store = {
   get(k,d){try{const v=localStorage.getItem(k);return v==null?d:v}catch(e){return d}},
   set(k,v){try{localStorage.setItem(k,v)}catch(e){}}
 };
-const { parse, blankWord, buildQuiz } = WC;
+const { parse, blankWord, buildQuiz, autoNext } = WC;
+const AUTO_MS = 5000; // 정답 후 자동으로 넘어가기까지
+let autoId = 0;
 function esc(t){return String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function loadWrong(){try{const a=JSON.parse(store.get('wc_wrong','[]'));return Array.isArray(a)?a:[]}catch(e){return[]}}
 
@@ -294,7 +296,7 @@ function quizView(){
    +(exText?'<p class="ex"><span class="exl">예문</span>'+esc(exText)+'</p>':'')+'</div>'
    +'<div class="opts">'+opts+'</div>'
    +'<div class="actions"><button class="btn hint" data-act="hint"'+(s.hint||c.answered?' disabled':'')+'>'+(s.hint?'힌트 사용함':'힌트 (오답 2개 지우기)')+'</button>'
-   +(c.answered?'<button id="next" class="btn sm" data-act="next">'+(s.qi>=total-1?'결과 보기':'다음 문제')+'</button>':'')+'</div></div></div>';
+   +(c.answered?'<button id="next" class="btn sm" data-act="next">'+nextLabel()+'</button>':'')+'</div></div></div>';
 }
 function resultView(){
   const total=s.quiz.length;
@@ -327,6 +329,20 @@ function updateDraft(fromRender){
   if(t)t.textContent=ok?'좋아요. 단어 '+n+'개를 읽었어요.':'한 줄에 "단어, 뜻" 하나씩 적어 주세요.';
 }
 
+function autoLeft(){return autoId?Math.max(0,s.autoAt-Date.now()):0}
+function nextLabel(){
+  const base=s.qi>=s.quiz.length-1?'결과 보기':'다음 문제';
+  return autoId?base+' ('+Math.ceil(autoLeft()/1000)+')':base;
+}
+function stopAuto(){clearInterval(autoId);autoId=0}
+function startAuto(){
+  stopAuto();
+  s.autoAt=Date.now()+AUTO_MS;
+  autoId=setInterval(()=>{
+    if(autoLeft()<=0){next();return}
+    const b=document.getElementById('next');if(b)b.textContent=nextLabel();
+  },250);
+}
 function stopTimer(){clearInterval(timerId);timerId=0}
 function startTimer(){
   stopTimer();
@@ -347,6 +363,7 @@ function tick(){
 
 function start(){
   const words=parse(s.text);if(words.length<4)return;
+  stopAuto();
   const quiz=buildQuiz(words,s.wrong,s.cfg.count);
   Object.assign(s,{screen:'quiz',words,quiz,qi:0,picked:-1,score:0,hint:false,missed:[],fixed:[]});
   render();window.scrollTo(0,0);startTimer();
@@ -362,9 +379,11 @@ function pick(k){
   s.wrong=wrong;s.picked=k;
   if(ok)s.score++;else s.missed.push(q.wi);
   if(ok&&q.wasWrong)s.fixed.push(q.wi);
+  if(autoNext(k,q.cpos))startAuto();
   render();
 }
 function next(){
+  stopAuto();
   if(s.qi>=s.quiz.length-1){s.screen='result';s.hint=false}
   else{s.qi++;s.picked=-1;s.hint=false}
   render();window.scrollTo(0,0);startTimer();

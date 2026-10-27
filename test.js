@@ -1,6 +1,11 @@
 // 실행: node test.js
 const assert = require('assert');
-const { parse, blankWord, buildQuiz } = require('./lib.js');
+const { parse, blankWord, buildQuiz, autoNext } = require('./lib.js');
+
+// 자동 넘김: 정답일 때만. 오답·시간 초과(99)는 수동
+assert.strictEqual(autoNext(2, 2), true);
+assert.strictEqual(autoNext(1, 2), false);
+assert.strictEqual(autoNext(99, 2), false);
 
 // parse: 예문
 let r = parse('abandon, 버리다, 포기하다 | He abandoned the plan.');
