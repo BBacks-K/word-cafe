@@ -1,6 +1,35 @@
 // 실행: node test.js
 const assert = require('assert');
-const { parse, blankWord, buildQuiz, autoNext } = require('./lib.js');
+const { parse, blankWord, buildQuiz, autoNext, timedOut } = require('./lib.js');
+
+// 시간 초과: 마감이 지난 뒤 클릭은 정답이어도 초과 처리 (타이머 없음 = 0초는 해당 없음)
+assert.strictEqual(timedOut(10, 1000, 999), false);
+assert.strictEqual(timedOut(10, 1000, 1000), true);
+assert.strictEqual(timedOut(10, 1000, 1500), true);
+assert.strictEqual(timedOut(0, 0, 99999), false);
+
+// 예문 가리기: 무관한 단어는 건드리지 않는다
+assert.strictEqual(blankWord('The student likes to study.', 'study'), 'The student likes to _____.');
+assert.strictEqual(blankWord('An apple a day.', 'a'), 'An apple _____ day.');
+assert.strictEqual(blankWord('They hesitated, then hesitating stopped.', 'hesitate'), 'They _____, then _____ stopped.');
+assert.strictEqual(blankWord('She denies it; he denied it.', 'deny'), 'She _____ it; he _____ it.');
+assert.strictEqual(blankWord('Prices fluctuate.', 'fluctuate'), 'Prices _____.');
+
+// 특이한 영어 단어도 단어장에서 빠지지 않는다
+assert.deepStrictEqual(parse('constructor, 생성자\n__proto__, 프로토').map((x) => x.w), ['constructor', '__proto__']);
+
+// 같은 뜻의 단어가 있어도 보기 문구가 겹치지 않는다
+const syn = [
+  { w: 'big', ko: '큰', ex: '' }, { w: 'large', ko: '큰', ex: '' },
+  { w: 'small', ko: '작은', ex: '' }, { w: 'tiny', ko: '아주 작은', ex: '' },
+  { w: 'fast', ko: '빠른', ex: '' }, { w: 'slow', ko: '느린', ex: '' }
+];
+for (let n = 0; n < 50; n++) {
+  buildQuiz(syn, [], 6).forEach((x) => {
+    const kos = x.opts.map((i) => syn[i].ko);
+    assert.strictEqual(new Set(kos).size, 4, '뜻 중복 보기: ' + kos);
+  });
+}
 
 // 자동 넘김: 정답일 때만. 오답·시간 초과(99)는 수동
 assert.strictEqual(autoNext(2, 2), true);

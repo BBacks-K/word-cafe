@@ -175,7 +175,7 @@ const store = {
   get(k,d){try{const v=localStorage.getItem(k);return v==null?d:v}catch(e){return d}},
   set(k,v){try{localStorage.setItem(k,v)}catch(e){}}
 };
-const { parse, blankWord, buildQuiz, autoNext } = WC;
+const { parse, blankWord, buildQuiz, autoNext, timedOut } = WC;
 const AUTO_MS = 5000; // 정답 후 자동으로 넘어가기까지
 let autoId = 0;
 function esc(t){return String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -209,7 +209,7 @@ function cur(){
   return {q,word:s.words[q.wi],answered:s.picked>=0,en2ko:q.dir==='en2ko'};
 }
 function savedWrongList(){
-  const known={};parse(s.text).forEach(w=>{known[w.w.toLowerCase()]=w});
+  const known=Object.create(null);parse(s.text).forEach(w=>{known[w.w.toLowerCase()]=w});
   return s.wrong.filter(k=>known[k]).map(k=>known[k]);
 }
 function coach(parsedLen,draftLen){
@@ -370,6 +370,7 @@ function start(){
 }
 function pick(k){
   if(s.picked>=0)return;
+  if(timedOut(s.cfg.sec,s.deadline,Date.now()))k=TIMEOUT; // 마감 뒤에 들어온 클릭은 시간 초과
   stopTimer();s.left=Math.max(0,s.deadline-Date.now());
   const q=s.quiz[s.qi],key=s.words[q.wi].w.toLowerCase(),ok=k===q.cpos;
   let wrong=s.wrong;
