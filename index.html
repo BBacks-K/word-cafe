@@ -173,6 +173,8 @@ label.filebtn:focus-within{outline:3px solid var(--green-ink);outline-offset:2px
 .rcard b{color:var(--green-ink)}
 .wknav{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .wknav b{font-variant-numeric:tabular-nums;text-align:center}
+.clocks{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:14px;color:var(--muted);font-variant-numeric:tabular-nums}
+.clocks b{color:var(--fg);font-weight:500}
 </style>
 </head>
 <body>
@@ -213,7 +215,7 @@ store.set('wc_probe','1'); // 저장이 막힌 브라우저(사생활 보호 모
 function saveWarn(){return storageFailed?'<p class="note" style="color:var(--wrong-ink);font-weight:500">이 브라우저에서는 단어장과 기록이 저장되지 않아요. 사생활 보호 모드이거나 저장 공간이 막혀 있을 수 있어요. 창을 닫으면 사라져요.</p>':''}
 const { parse, blankWord, buildQuiz, autoNext, timedOut, dayKey, recordAnswer, sanitizeLog, buckets, totals, trend, niceMax,
   sanitizeCfg, makeBackup, parseBackup, checkAnswer, hintPattern, isCorrectTyped,
-  addDays, weekStart, recordSrs, sanitizeSrs, dueCount, recordWord, sanitizeWlog, pruneWlog, weekReport, firstWeek, reportCardWeek, reportText } = WC;
+  addDays, weekStart, recordSrs, sanitizeSrs, dueCount, recordWord, sanitizeWlog, pruneWlog, weekReport, firstWeek, reportCardWeek, reportText, clockText } = WC;
 const AUTO_MS = 5000; // 정답 후 자동으로 넘어가기까지
 let autoId = 0;
 function esc(t){return String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -299,6 +301,10 @@ function dueNow(){return dueCount(s.srs,parse(s.text).map(w=>w.w.toLowerCase()),
 // 틀린 단어(복습할 단어)가 하나도 없으면 그 범위는 쓸 수 없으니 전체로 본다
 function effScope(){return s.cfg.scope==='wrong'&&savedWrongList().length?'wrong':s.cfg.scope==='due'&&dueNow()?'due':'all'}
 function fmtWeek(k){const e=addDays(k,6),f=x=>+x.slice(5,7)+'/'+ +x.slice(8);return f(k)+' ~ '+f(e)}
+const CLOCKS=[['한국','Asia/Seoul'],['밴쿠버','America/Vancouver']];
+function clocks(){const d=new Date();return CLOCKS.map(c=>'<span>'+c[0]+' <b>'+clockText(d,c[1])+'</b></span>').join('')}
+// 화면 전체를 다시 그리면 입력이 끊기므로 시계 부분만 바꾼다
+setInterval(()=>{const el=document.querySelector('.clocks');if(el)el.innerHTML=clocks()},30000);
 function cardView(){
   const wk=reportCardWeek(s.log,s.seen,today());if(!wk)return '';
   const r=weekReport(s.log,s.wlog,wk);
@@ -317,6 +323,7 @@ function startView(parsed){
   const avail=scope==='wrong'?wl.length:scope==='due'?due:parsed.length, nq=Math.min(s.cfg.count,avail);
   return '<div class="card">'
    +cardView()
+   +'<p class="clocks">'+clocks()+'</p>'
    +'<span class="eyebrow">VOCABULARY TEST</span>'
    +'<h1 class="title">오늘의 단어,<br>한 번 풀어볼까요?</h1>'
    +'<p class="lead">영어 단어를 보고 뜻을 고르거나, 뜻을 보고 영어 단어를 고르거나, 예문 빈칸에 들어갈 단어를 맞히는 문제가 섞여서 나와요. 틀린 단어는 다음 시험에 먼저 나오고, 맞힌 단어도 1일·3일·7일… 간격으로 다시 복습해요.</p>'
@@ -329,11 +336,11 @@ function startView(parsed){
    +(wl.length?'<div class="rows">'+wl.map(w=>'<div class="row"><span class="tag">틀렸던 단어</span><span class="en">'+esc(w.w)+'</span><span class="ko">'+esc(w.ko)+'</span></div>').join('')+'</div>':'')
    +(few?'<p class="warn">시험을 보려면 단어가 4개 이상 필요해요. 단어장을 먼저 채워 주세요.</p>':'')
    +'<div class="sets">'
-   +seg('풀이 방식','mode',['choice','type'],v=>v==='type'?'직접 쓰기':'보기 고르기')
+   +seg('풀이 방식','mode',['choice','type'],v=>v==='type'?'주관식':'객관식')
    +seg('출제 범위','scope',['all','wrong','due'],v=>v==='wrong'?'틀린 단어만':v==='due'?'복습할 단어':'전체',v=>v==='wrong'&&!wl.length||v==='due'&&!due,scope)
    +seg('문제 수','count',[10,30,50],v=>v+'문제')
    +seg('문제당 제한 시간','sec',[0,10,20,30,60],v=>v?v+'초':'없음')+'</div>'
-   +(s.cfg.mode==='type'?'<p class="note">직접 쓰기는 한글 뜻이나 예문 빈칸을 보고 영어 단어를 써요. 철자가 정확해야 정답이고, 대소문자는 상관없어요. 빈칸 문제는 단어장에 적힌 형태 그대로 써 주세요.</p>':'')
+   +(s.cfg.mode==='type'?'<p class="note">주관식은 한글 뜻이나 예문 빈칸을 보고 영어 단어를 써요. 철자가 정확해야 정답이고, 대소문자는 상관없어요. 빈칸 문제는 단어장에 적힌 형태 그대로 써 주세요.</p>':'')
    +(s.cfg.scope==='wrong'&&!wl.length?'<p class="note">틀렸던 단어가 없어서 이번에는 전체 단어에서 나와요.</p>':'')
    +(s.cfg.scope==='due'&&!due?'<p class="note">오늘 복습할 단어가 없어서 이번에는 전체 단어에서 나와요.</p>':'')
    +(scope==='wrong'?'<p class="note">틀렸던 단어 '+wl.length+'개 중에서 '+nq+'문제가 나와요.</p>':scope==='due'?'<p class="note">오늘 복습할 단어 '+due+'개 중에서 '+nq+'문제가 나와요.</p>':!few&&parsed.length<s.cfg.count?'<p class="note">단어장에 단어가 '+parsed.length+'개라서 '+parsed.length+'문제만 나와요.</p>':'')

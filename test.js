@@ -402,4 +402,12 @@ assert.deepStrictEqual(oldBk.data.srs, {});
 assert.deepStrictEqual(oldBk.data.wlog, {});
 assert.strictEqual(oldBk.data.seenReport, '');
 assert.strictEqual(parseBackup('{"app":"word-cafe","v":1,"words":"a, 가","seenReport":"nope"}').data.seenReport, '');
+
+// ---- 첫 화면 시계: 한국·밴쿠버(서머타임 자동) ----
+const { clockText } = require('./lib.js');
+assert.strictEqual(clockText(new Date(Date.UTC(2026, 9, 29, 12, 5)), 'Asia/Seoul'), '10/29(목) 21:05');
+assert.strictEqual(clockText(new Date(Date.UTC(2026, 9, 29, 12, 5)), 'America/Vancouver'), '10/29(목) 05:05'); // PDT(UTC-7)
+assert.strictEqual(clockText(new Date(Date.UTC(2025, 10, 3, 12, 0)), 'America/Vancouver'), '11/3(월) 04:00'); // 2025년 겨울은 UTC-8: 시차 변경을 시간대 데이터가 반영한다(2026년 3월부터는 UTC-7 고정)
+assert.strictEqual(clockText(new Date(Date.UTC(2026, 10, 2, 12, 0)), 'America/Vancouver'), '11/2(월) 05:00'); // tzdata 2026b: BC는 2026년 3월부터 UTC-7 고정
+assert.strictEqual(clockText(new Date(Date.UTC(2026, 9, 29, 15, 0)), 'Asia/Seoul'), '10/30(금) 00:00'); // 자정은 24:00이 아니라 00:00
 console.log('ALL OK');

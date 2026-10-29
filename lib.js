@@ -255,6 +255,14 @@
     return log;
   }
 
+  // 첫 화면 시계: "10/29(목) 21:05". 서머타임은 브라우저의 시간대 정보가 처리한다.
+  function clockText(date, timeZone) {
+    var p = {};
+    new Intl.DateTimeFormat('ko-KR', { timeZone: timeZone, month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+      .formatToParts(date).forEach(function (x) { p[x.type] = x.value; });
+    return p.month + '/' + p.day + '(' + p.weekday + ') ' + p.hour + ':' + p.minute;
+  }
+
   // 저장돼 있던 값이 망가져도 앱이 죽지 않게, 형식이 맞는 날짜만 남긴다.
   function sanitizeLog(raw) {
     var out = {};
@@ -389,7 +397,7 @@
       srs: sanitizeSrs(o.srs), wlog: sanitizeWlog(o.wlog), seenReport: isDay(o.seenReport) ? o.seenReport : '' } };
   }
 
-  var api = { addDays: addDays, weekStart: weekStart, srsNext: srsNext, recordSrs: recordSrs, sanitizeSrs: sanitizeSrs, dueCount: dueCount, canBlank: canBlank,
+  var api = { clockText: clockText, addDays: addDays, weekStart: weekStart, srsNext: srsNext, recordSrs: recordSrs, sanitizeSrs: sanitizeSrs, dueCount: dueCount, canBlank: canBlank,
     recordWord: recordWord, sanitizeWlog: sanitizeWlog, pruneWlog: pruneWlog, weekReport: weekReport, firstWeek: firstWeek,
     reportCardWeek: reportCardWeek, reportText: reportText, sanitizeCfg: sanitizeCfg, checkAnswer: checkAnswer, hintPattern: hintPattern, isCorrectTyped: isCorrectTyped, makeBackup: makeBackup, parseBackup: parseBackup, dayKey: dayKey, recordAnswer: recordAnswer, sanitizeLog: sanitizeLog, buckets: buckets, totals: totals, trend: trend, niceMax: niceMax, parse: parse, blankWord: blankWord, buildQuiz: buildQuiz, shuffle: shuffle, autoNext: autoNext, timedOut: timedOut };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
