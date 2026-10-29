@@ -1,7 +1,9 @@
 // 실행: node test.js
 const assert = require('assert');
 const { parse, blankWord, buildQuiz, autoNext, timedOut, dayKey, recordAnswer, sanitizeLog, buckets, totals, trend, niceMax,
-  sanitizeCfg, makeBackup, parseBackup, checkAnswer, hintPattern, isCorrectTyped } = require('./lib.js');
+  sanitizeCfg, makeBackup, parseBackup, checkAnswer, hintPattern, isCorrectTyped,
+  addDays, weekStart, srsNext, recordSrs, sanitizeSrs, dueCount, canBlank, recordWord, sanitizeWlog, pruneWlog,
+  weekReport, firstWeek, reportCardWeek, reportText } = require('./lib.js');
 
 // ---- 주관식: 같은 뜻의 다른 단어도 정답으로 인정 ----
 const syn2 = [{ w: 'big', ko: '큰' }, { w: 'large', ko: '큰' }, { w: 'small', ko: '작은' }];
@@ -42,7 +44,7 @@ const bk = { words: 'abandon, 버리다 | He left.\ndeny, 부인하다', wrong: 
 const txt = makeBackup(bk, new Date(Date.UTC(2026, 9, 27)));
 let pb = parseBackup(txt);
 assert.strictEqual(pb.ok, true);
-assert.deepStrictEqual(pb.data, bk); // 한 바퀴 돌아도 그대로
+assert.deepStrictEqual(pb.data, Object.assign({ srs: {}, wlog: {}, seenReport: '' }, bk)); // 한 바퀴 돌아도 그대로(새 항목은 빈 값)
 // 메신저가 앞뒤에 글을 붙여도 읽는다
 assert.strictEqual(parseBackup('백업입니다 👇\n' + txt + '\n끝').ok, true);
 assert.strictEqual(parseBackup('hello').ok, false);
@@ -53,7 +55,7 @@ assert.strictEqual(parseBackup('{"app":"word-cafe","v":1,"words":123}').ok, fals
 // 일부가 망가져도 나머지는 살리고 앱이 죽지 않는다
 pb = parseBackup('{"app":"word-cafe","v":1,"words":"a, 가","wrong":[1,"Deny",null],"log":{"x":1},"cfg":{"count":99}}');
 assert.strictEqual(pb.ok, true);
-assert.deepStrictEqual(pb.data, { words: 'a, 가', wrong: ['deny'], log: {}, cfg: { count: 10, sec: 0, mode: 'choice', scope: 'all' } });
+assert.deepStrictEqual(pb.data, { words: 'a, 가', wrong: ['deny'], log: {}, cfg: { count: 10, sec: 0, mode: 'choice', scope: 'all' }, srs: {}, wlog: {}, seenReport: '' });
 
 // ---- 틀린 단어만 풀기 ----
 const ww = Array.from({ length: 20 }, (_, i) => ({ w: 'w' + i, ko: 'k' + i, ex: '' }));
@@ -204,4 +206,200 @@ for (const total of [10, 30, 50, 80]) {
 // 틀린 단어가 문제 수보다 많아도 문제 수를 넘지 않는다
 const many = words.slice(0, 20).map((x) => x.w);
 assert.strictEqual(buildQuiz(words, many, 10).length, 10);
+
+// ---- 날짜 더하기: 달력 기준 ----
+assert.strictEqual(addDays('2026-01-31', 1), '2026-02-01');
+assert.strictEqual(addDays('2026-12-31', 1), '2027-01-01');
+assert.strictEqual(addDays('2028-02-28', 1), '2028-02-29'); // 윤년
+assert.strictEqual(addDays('2027-02-28', 1), '2027-03-01');
+assert.strictEqual(addDays('2026-03-01', -1), '2026-02-28');
+assert.strictEqual(addDays('2026-10-29', 60), '2026-12-28');
+assert.strictEqual(weekStart('2026-11-01'), '2026-10-26'); // 일요일 → 그 주 월요일
+assert.strictEqual(weekStart('2026-11-02'), '2026-11-02'); // 월요일
+
+// ---- 간격 반복 전이표 ----
+const T0 = '2026-10-29';
+assert.deepStrictEqual(srsNext(undefined, true, T0), { b: 1, due: '2026-10-30' }); // 처음 보는 단어 맞힘
+assert.deepStrictEqual(srsNext(undefined, false, T0), { b: 0, due: '2026-10-30' });
+assert.deepStrictEqual(srsNext({ b: 1, due: T0 }, true, T0), { b: 2, due: '2026-11-01' }); // 3일
+assert.deepStrictEqual(srsNext({ b: 2, due: '2026-10-20' }, true, T0), { b: 3, due: '2026-11-05' }); // 밀린 복습도 1단계만
+assert.deepStrictEqual(srsNext({ b: 3, due: T0 }, true, T0), { b: 4, due: '2026-11-12' });
+assert.deepStrictEqual(srsNext({ b: 4, due: T0 }, true, T0), { b: 5, due: '2026-11-28' });
+assert.deepStrictEqual(srsNext({ b: 5, due: T0 }, true, T0), { b: 6, due: '2026-12-28' });
+assert.deepStrictEqual(srsNext({ b: 6, due: T0 }, true, T0), { b: 6, due: '2026-12-28' }); // 최대 6
+assert.deepStrictEqual(srsNext({ b: 0, due: T0 }, true, T0), { b: 1, due: '2026-10-30' }); // 틀렸던 단어가 복습일에 맞힘
+assert.deepStrictEqual(srsNext({ b: 3, due: '2026-11-05' }, true, T0), { b: 3, due: '2026-11-05' }); // 복습일 전 정답은 그대로
+assert.deepStrictEqual(srsNext({ b: 3, due: '2026-11-05' }, false, T0), { b: 0, due: '2026-10-30' }); // 언제든 틀리면 처음부터
+// 1 → 3 → 7일 흐름
+let st = srsNext(undefined, true, '2026-10-29');
+assert.strictEqual(st.due, '2026-10-30');
+st = srsNext(st, true, st.due);
+assert.strictEqual(st.due, '2026-11-02');
+st = srsNext(st, true, st.due);
+assert.strictEqual(st.due, '2026-11-09');
+
+// 답 기록: 이상한 단어 이름이 객체 구조를 망가뜨리지 않는다
+const rs = {};
+recordSrs(rs, 'constructor', true, T0);
+recordSrs(rs, '__proto__', true, T0);
+assert.deepStrictEqual(rs, { constructor: { b: 1, due: '2026-10-30' } });
+assert.strictEqual(Object.getPrototypeOf(rs), Object.prototype);
+recordSrs(rs, 'constructor', false, T0);
+assert.deepStrictEqual(rs.constructor, { b: 0, due: '2026-10-30' });
+
+// 망가진 저장값 정리
+assert.deepStrictEqual(sanitizeSrs({ a: { b: 2, due: '2026-10-30' }, b: { b: 9, due: '2026-10-30' }, c: { b: 1, due: '2026-02-30' }, d: null, e: { b: '1', due: '2026-10-30' } }), { a: { b: 2, due: '2026-10-30' } });
+assert.deepStrictEqual(sanitizeSrs('x'), {});
+assert.deepStrictEqual(sanitizeSrs([]), {});
+
+// 복습할 단어 수: 지금 단어장에 있는 단어 중 due <= 오늘
+const srs1 = { a: { b: 1, due: '2026-10-29' }, b: { b: 1, due: '2026-10-28' }, c: { b: 1, due: '2026-10-30' }, gone: { b: 1, due: '2026-10-01' } };
+assert.strictEqual(dueCount(srs1, ['a', 'b', 'c', 'd'], '2026-10-29'), 2);
+assert.strictEqual(dueCount(srs1, ['a', 'b', 'c', 'd'], '2026-10-29', 7), 3); // 앞으로 7일 안
+assert.strictEqual(dueCount({}, ['a'], '2026-10-29'), 0);
+
+// ---- 출제 우선순위: 틀림 → 복습일 됨(오래 밀린 순) → 처음 보는 단어 → 나머지 ----
+const pw = Array.from({ length: 12 }, (_, i) => ({ w: 'p' + i, ko: 'k' + i, ex: '' }));
+const psrs = {
+  p0: { b: 0, due: '2026-10-30' },              // 틀린 단어 목록에 있음
+  p1: { b: 2, due: '2026-10-20' },              // 오래 밀림
+  p2: { b: 2, due: '2026-10-28' },              // 밀림
+  p3: { b: 2, due: '2026-11-20' },              // 아직
+  p4: { b: 2, due: '2026-11-20' }, p5: { b: 2, due: '2026-11-20' }, p6: { b: 2, due: '2026-11-20' },
+  p7: { b: 2, due: '2026-11-20' }, p8: { b: 2, due: '2026-11-20' }
+}; // p9 p10 p11 처음 보는 단어
+const pq = buildQuiz(pw, ['p0'], 4, Math.random, { srs: psrs, today: T0 });
+const pqNames = pq.map((x) => pw[x.wi].w);
+['p0', 'p1', 'p2'].forEach((w) => assert.ok(pqNames.includes(w), w + ' 우선 출제 누락'));
+assert.ok(['p9', 'p10', 'p11'].includes(pqNames.find((w) => !['p0', 'p1', 'p2'].includes(w))), '4번째는 처음 보는 단어');
+// 밀린 복습이 문제 수보다 많으면 오래 밀린 것부터
+const pq2 = buildQuiz(pw, [], 1, Math.random, { srs: psrs, today: T0 });
+assert.strictEqual(pw[pq2[0].wi].w, 'p1');
+// 범위 'due': 복습일이 된 단어만
+const pq3 = buildQuiz(pw, ['p0'], 10, Math.random, { scope: 'due', srs: psrs, today: T0 });
+assert.deepStrictEqual(pq3.map((x) => pw[x.wi].w).sort(), ['p1', 'p2']);
+pq3.forEach((x) => assert.strictEqual(x.opts.length, 4)); // 보기는 전체 단어장에서
+// 범위 'wrong'은 지금처럼
+const pq4 = buildQuiz(pw, ['p0', 'p5'], 10, Math.random, { scope: 'wrong', srs: psrs, today: T0 });
+assert.deepStrictEqual(pq4.map((x) => pw[x.wi].w).sort(), ['p0', 'p5']);
+assert.strictEqual(sanitizeCfg({ scope: 'due' }).scope, 'due');
+
+// ---- 예문 빈칸 문제 ----
+assert.strictEqual(canBlank({ w: 'abandon', ex: 'He abandoned the plan.' }), true);
+assert.strictEqual(canBlank({ w: 'abandon', ex: '' }), false);
+assert.strictEqual(canBlank({ w: 'go', ex: 'He went home.' }), false); // 불규칙 변화형은 못 가린다
+assert.strictEqual(canBlank({ w: 'zebra', ex: 'No match here.' }), false);
+const bw2 = Array.from({ length: 30 }, (_, i) => ({ w: 'b' + i, ko: 'k' + i, ex: i < 15 ? 'I like b' + i + ' a lot.' : '' }));
+let dirs = new Set();
+for (let r = 0; r < 20; r++) {
+  buildQuiz(bw2, [], 30).forEach((x) => {
+    dirs.add(x.dir);
+    if (x.dir === 'blank') assert.ok(bw2[x.wi].ex, '예문 없는 단어가 빈칸 문제로 나옴');
+  });
+}
+assert.deepStrictEqual([...dirs].sort(), ['blank', 'en2ko', 'ko2en']);
+// 직접 쓰기: 영→한은 나오지 않는다
+dirs = new Set();
+for (let r = 0; r < 20; r++) buildQuiz(bw2, [], 30, Math.random, { mode: 'type' }).forEach((x) => dirs.add(x.dir));
+assert.deepStrictEqual([...dirs].sort(), ['blank', 'ko2en']);
+// 빈칸 채점: 원형만 정답, 같은 뜻의 다른 단어는 오답
+const syn3 = [{ w: 'big', ko: '큰', ex: 'It is a big house.' }, { w: 'large', ko: '큰', ex: '' }];
+assert.strictEqual(isCorrectTyped(syn3, 0, 'large', 'blank'), false);
+assert.strictEqual(isCorrectTyped(syn3, 0, 'BIG', 'blank'), true);
+assert.strictEqual(isCorrectTyped(syn3, 0, 'large'), true); // 한→영은 지금처럼 동의어 인정
+
+// ---- 단어별 기록 ----
+const wl = {};
+recordWord(wl, '2026-10-29', 'abandon', true);
+recordWord(wl, '2026-10-29', 'abandon', false);
+recordWord(wl, '2026-10-29', 'deny', false);
+assert.deepStrictEqual(wl, { '2026-10-29': { abandon: [1, 1], deny: [0, 1] } });
+assert.deepStrictEqual(sanitizeWlog({ '2026-10-29': { a: [1, 2], b: [1, -1], c: ['1', 0], d: [1] }, 'bad': { a: [1, 1] }, '2026-02-30': { a: [1, 1] } }), { '2026-10-29': { a: [1, 2] } });
+assert.deepStrictEqual(sanitizeWlog(null), {});
+// 26주보다 오래된 주는 통째로 지운다(주 경계에서 자른다)
+const old = { '2026-05-03': { a: [1, 0] }, '2026-05-04': { a: [1, 0] }, '2026-10-29': { a: [1, 0] } };
+assert.deepStrictEqual(Object.keys(pruneWlog(old, '2026-10-29')), ['2026-05-04', '2026-10-29']); // 이번 주 포함 26주 = 5/4 주부터
+
+// ---- 주간 리포트 ----
+const rlog = {
+  '2026-10-12': { n: 10, w: 5 },                                  // 2주 전
+  '2026-10-19': { n: 10, w: 4 }, '2026-10-21': { n: 10, w: 2 },   // 지난주: 20문제 6틀림 30%
+  '2026-10-26': { n: 10, w: 1 }, '2026-10-27': { n: 10, w: 1 }, '2026-11-01': { n: 20, w: 2 } // 이번 주(일요일 포함)
+};
+let rp = weekReport(rlog, {}, '2026-10-19');
+assert.strictEqual(rp.start, '2026-10-19');
+assert.strictEqual(rp.end, '2026-10-25');
+assert.strictEqual(rp.n, 20);
+assert.strictEqual(rp.w, 6);
+assert.strictEqual(rp.rate, 30);
+assert.strictEqual(rp.days, 2);
+assert.strictEqual(rp.diff, -20); // 전 주 50% → 30%
+assert.strictEqual(rp.words, 'none'); // 단어별 기록 없음
+assert.deepStrictEqual(rp.top, []);
+rp = weekReport(rlog, {}, '2026-10-26');
+assert.strictEqual(rp.n, 40);
+assert.strictEqual(rp.days, 3); // 일요일 11/1 포함
+assert.strictEqual(rp.rate, 10);
+assert.strictEqual(rp.diff, -20);
+rp = weekReport(rlog, {}, '2026-10-12');
+assert.strictEqual(rp.diff, null); // 전 주에 푼 문제 없음
+rp = weekReport({}, {}, '2026-10-12');
+assert.strictEqual(rp.n, 0);
+assert.strictEqual(rp.rate, null);
+assert.strictEqual(rp.days, 0);
+// 단어별 기록: 상위 5개, 틀린 수 많은 순 → 같으면 알파벳 순, 1번 이상 틀린 것만
+const rw = {
+  '2026-10-27': { zeta: [0, 2], alpha: [1, 2], beta: [3, 0], gamma: [0, 1], delta: [0, 1], eps: [0, 1], eta: [0, 1] },
+  '2026-10-28': { zeta: [0, 1] }
+};
+rp = weekReport(rlog, rw, '2026-10-26');
+assert.deepStrictEqual(rp.top.map((t) => t.w), ['zeta', 'alpha', 'delta', 'eps', 'eta']);
+assert.deepStrictEqual(rp.top[0], { w: 'zeta', wrong: 3, right: 0 });
+assert.strictEqual(rp.words, '2026-10-27'); // 주 중간(화요일)부터 기록됨
+rp = weekReport(rlog, { '2026-10-26': { a: [0, 1] }, '2026-10-28': { b: [1, 0] } }, '2026-10-26');
+assert.strictEqual(rp.words, 'full'); // 월요일부터 기록됨
+rp = weekReport(rlog, { '2026-10-19': { a: [0, 1] }, '2026-10-28': { b: [1, 0] } }, '2026-10-26');
+assert.strictEqual(rp.words, 'full'); // 지난주부터 기록이 있었으면 이번 주는 온전함
+assert.deepStrictEqual(rp.top.map((t) => t.w), []); // 이번 주에 틀린 단어 없음
+// 예전 주에만 단어별 기록이 있고 이 주엔 없으면(지워졌거나 저장 실패) "틀린 단어 없음"이 아니라 "기록 없음"
+rp = weekReport(rlog, { '2026-10-12': { a: [0, 1] } }, '2026-10-26');
+assert.strictEqual(rp.words, 'none');
+
+// 리포트 볼 수 있는 가장 오래된 주
+assert.strictEqual(firstWeek(rlog, {}), '2026-10-12');
+assert.strictEqual(firstWeek({}, { '2026-10-07': { a: [1, 0] } }), '2026-10-05');
+assert.strictEqual(firstWeek({}, {}), null);
+
+// 새 주 알림 카드: 지난주에 푼 문제가 있고, 아직 안 본 경우에만 지난주 월요일을 돌려준다
+assert.strictEqual(reportCardWeek(rlog, '', '2026-10-27'), '2026-10-19');
+assert.strictEqual(reportCardWeek(rlog, '2026-10-19', '2026-10-27'), null); // 이미 봄
+assert.strictEqual(reportCardWeek(rlog, '', '2026-11-03'), '2026-10-26');
+assert.strictEqual(reportCardWeek(rlog, '', '2026-11-10'), null); // 지난주(11/2 주)에 안 풀었음
+assert.strictEqual(reportCardWeek({}, '', '2026-10-27'), null);
+
+// 복사용 글: 화면과 같은 집계
+const rtxt = reportText({ start: '2026-10-26', end: '2026-11-01', n: 40, w: 4, rate: 10, days: 3, diff: -20, words: 'full', top: [{ w: 'zeta', ko: '제타', wrong: 3, right: 0 }] }, 5);
+assert.ok(rtxt.includes('10/26 ~ 11/1'));
+assert.ok(rtxt.includes('40문제'));
+assert.ok(rtxt.includes('오답률 10%'));
+assert.ok(rtxt.includes('20%p 줄었어요'));
+assert.ok(rtxt.includes('7일 중 3일'));
+assert.ok(rtxt.includes('zeta (제타) 3번'));
+assert.ok(rtxt.includes('앞으로 7일 동안 복습할 단어 5개'));
+const rtxt2 = reportText({ start: '2026-10-12', end: '2026-10-18', n: 10, w: 5, rate: 50, days: 1, diff: null, words: 'none', top: [] }, null);
+assert.ok(rtxt2.includes('비교할 기록 없음'));
+assert.ok(rtxt2.includes('단어별 기록이 없어요'));
+assert.ok(!rtxt2.includes('복습할 단어'));
+assert.ok(reportText({ start: '2026-10-26', end: '2026-11-01', n: 10, w: 1, rate: 10, days: 1, diff: 0, words: '2026-10-28', top: [] }, null).includes('10/28부터 기록된 내용'));
+
+// ---- 백업: 새 데이터 왕복, 옛 백업은 새 데이터를 빈 값으로 ----
+const full = { words: 'a, 가', wrong: ['a'], log: { '2026-10-29': { n: 1, w: 1 } }, cfg: sanitizeCfg({ scope: 'due' }), srs: { a: { b: 0, due: '2026-10-30' } }, wlog: { '2026-10-29': { a: [0, 1] } }, seenReport: '2026-10-19' };
+const rt = parseBackup(makeBackup(full, new Date()));
+assert.deepStrictEqual(rt.data, full);
+assert.strictEqual(makeBackup(rt.data, new Date(0)), makeBackup(full, new Date(0)));
+const oldBk = parseBackup('{"app":"word-cafe","v":1,"words":"a, 가","wrong":[],"log":{}}');
+assert.deepStrictEqual(oldBk.data.srs, {});
+assert.deepStrictEqual(oldBk.data.wlog, {});
+assert.strictEqual(oldBk.data.seenReport, '');
+assert.strictEqual(parseBackup('{"app":"word-cafe","v":1,"words":"a, 가","seenReport":"nope"}').data.seenReport, '');
 console.log('ALL OK');

@@ -76,7 +76,7 @@ p{margin:0}
 .eyebrow{font-size:13px;font-weight:700;color:var(--green-ink);letter-spacing:.08em}
 .title{font-family:var(--serif);font-size:clamp(30px,6vw,46px);line-height:1.15;font-weight:600}
 .lead{color:var(--muted);font-size:16px;line-height:1.7;max-width:560px}
-.stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
 .stat{border-radius:14px;padding:14px 16px;background:var(--surface2)}
 .stat.w{background:var(--wrong-soft)}
 .stat small{display:block;font-size:13px;color:var(--muted)}
@@ -167,6 +167,12 @@ label.filebtn:focus-within{outline:3px solid var(--green-ink);outline-offset:2px
 .tbl th:first-child,.tbl td:first-child{text-align:left}
 .tbl th{color:var(--muted);font-weight:500}
 .tbl tr.none td{color:var(--muted)}
+.q-ex{font-family:var(--serif);font-size:clamp(24px,6vw,30px);line-height:1.45;font-weight:600;overflow-wrap:anywhere}
+.rcard{display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px;padding:14px 16px;border-radius:14px;background:var(--green-bg)}
+.rcard p{flex:1 1 220px;font-size:15px}
+.rcard b{color:var(--green-ink)}
+.wknav{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.wknav b{font-variant-numeric:tabular-nums;text-align:center}
 </style>
 </head>
 <body>
@@ -206,7 +212,8 @@ let storageFailed=false;
 store.set('wc_probe','1'); // 저장이 막힌 브라우저(사생활 보호 모드 등)를 미리 알아챈다
 function saveWarn(){return storageFailed?'<p class="note" style="color:var(--wrong-ink);font-weight:500">이 브라우저에서는 단어장과 기록이 저장되지 않아요. 사생활 보호 모드이거나 저장 공간이 막혀 있을 수 있어요. 창을 닫으면 사라져요.</p>':''}
 const { parse, blankWord, buildQuiz, autoNext, timedOut, dayKey, recordAnswer, sanitizeLog, buckets, totals, trend, niceMax,
-  sanitizeCfg, makeBackup, parseBackup, checkAnswer, hintPattern, isCorrectTyped } = WC;
+  sanitizeCfg, makeBackup, parseBackup, checkAnswer, hintPattern, isCorrectTyped,
+  addDays, weekStart, recordSrs, sanitizeSrs, dueCount, recordWord, sanitizeWlog, pruneWlog, weekReport, firstWeek, reportCardWeek, reportText } = WC;
 const AUTO_MS = 5000; // 정답 후 자동으로 넘어가기까지
 let autoId = 0;
 function esc(t){return String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -217,8 +224,11 @@ const text0 = saved0 === OLD_SAMPLE ? SAMPLE : saved0; // 예문 없는 옛 예�
 function loadCfg(){try{return sanitizeCfg(JSON.parse(store.get('wc_cfg','{}')))}catch(e){return sanitizeCfg()}}
 const WRONG_ANS = 98; // 주관식에서 틀린 답을 낸 경우(보기 번호 0~3, 시간 초과 99와 겹치지 않는 값)
 function loadLog(){try{return sanitizeLog(JSON.parse(store.get('wc_log','{}')))}catch(e){return{}}}
-const UNITS=[['day','하루','하루 단위 · 최근 14일'],['week','일주일','일주일 단위 · 최근 8주'],['month','한 달','한 달 단위 · 최근 6개월']];
-const s = {log:loadLog(),unit:'day',screen:'start',text:text0,draft:text0,wrong:loadWrong(),words:[],quiz:[],qi:0,picked:-1,score:0,hint:false,missed:[],fixed:[],cfg:loadCfg(),deadline:0,typed:'',flash:'',bk:{text:'',armed:false}};
+function loadSrs(){try{return sanitizeSrs(JSON.parse(store.get('wc_srs','{}')))}catch(e){return{}}}
+function loadWlog(){try{return sanitizeWlog(JSON.parse(store.get('wc_wlog','{}')))}catch(e){return{}}}
+const UNITS=[['day','하루','하루 단위 · 최근 14일'],['week','일주일','일주일 단위 · 최근 8주'],['month','한 달','한 달 단위 · 최근 6개월'],['report','주간 리포트','월요일부터 일요일까지 한 주 요약']];
+function today(){return dayKey(new Date())}
+const s = {srs:loadSrs(),wlog:loadWlog(),seen:store.get('wc_seenReport',''),rweek:weekStart(today()),log:loadLog(),unit:'day',screen:'start',text:text0,draft:text0,wrong:loadWrong(),words:[],quiz:[],qi:0,picked:-1,score:0,hint:false,missed:[],fixed:[],cfg:loadCfg(),deadline:0,typed:'',flash:'',bk:{text:'',armed:false}};
 let timerId = 0;
 const TIMEOUT = 99; // 시간 초과는 어떤 보기와도 겹치지 않는 값으로 기록한다
 const app = document.getElementById('app');
@@ -238,7 +248,7 @@ const SPARK=(()=>{let l='';for(let i=0;i<12;i++)l+='<line x1="14" y1="'+(i%2?4:1
 
 function cur(){
   const q=s.quiz[s.qi]; if(!q) return null;
-  return {q,word:s.words[q.wi],answered:s.picked>=0,en2ko:q.dir==='en2ko'};
+  return {q,word:s.words[q.wi],answered:s.picked>=0,en2ko:q.dir==='en2ko',blank:q.dir==='blank'};
 }
 function savedWrongList(){
   const known=Object.create(null);parse(s.text).forEach(w=>{known[w.w.toLowerCase()]=w});
@@ -251,6 +261,8 @@ function coach(parsedLen,draftLen){
     text=parsedLen<4?'단어장에 단어를 4개 이상 넣어 주세요. 같이 외워 봐요.':n?'틀렸던 단어 '+n+'개가 기다리고 있어요. 이번엔 꼭 잡아 봐요.':'어서 와요. 오늘도 같이 외워 봐요.';
   }else if(s.screen==='edit'){
     text=draftLen>=4?'좋아요. 단어 '+draftLen+'개를 읽었어요.':'한 줄에 "단어, 뜻" 하나씩 적어 주세요.';
+  }else if(s.screen==='stats'&&s.unit==='report'){
+    text='한 주 동안의 공부를 정리했어요. ◀ ▶로 지난 주도 볼 수 있어요.';
   }else if(s.screen==='stats'){
     const tr=trend(buckets(s.log,s.unit,new Date()));
     if(!tr)text='기록이 쌓이면 오답률이 어떻게 변하는지 보여 드릴게요.';
@@ -283,8 +295,16 @@ function seg(label,key,vals,fmt,off,cur){
   return '<div class="set"><div class="lbl">'+label+'</div><div class="seg" role="group" aria-label="'+label+'">'
    +vals.map(v=>'<button class="segb" data-act="cfg" data-key="'+key+'" data-val="'+v+'" aria-pressed="'+(now===v)+'"'+(off&&off(v)?' disabled':'')+'>'+fmt(v)+'</button>').join('')+'</div></div>';
 }
-// 틀린 단어가 하나도 없으면 "틀린 단어만"은 쓸 수 없으니 전체로 본다
-function effScope(){return s.cfg.scope==='wrong'&&savedWrongList().length?'wrong':'all'}
+function dueNow(){return dueCount(s.srs,parse(s.text).map(w=>w.w.toLowerCase()),today())}
+// 틀린 단어(복습할 단어)가 하나도 없으면 그 범위는 쓸 수 없으니 전체로 본다
+function effScope(){return s.cfg.scope==='wrong'&&savedWrongList().length?'wrong':s.cfg.scope==='due'&&dueNow()?'due':'all'}
+function fmtWeek(k){const e=addDays(k,6),f=x=>+x.slice(5,7)+'/'+ +x.slice(8);return f(k)+' ~ '+f(e)}
+function cardView(){
+  const wk=reportCardWeek(s.log,s.seen,today());if(!wk)return '';
+  const r=weekReport(s.log,s.wlog,wk);
+  return '<div class="rcard" role="status"><p><b>지난주 리포트가 나왔어요</b><br>'+fmtWeek(wk)+' · '+r.n+'문제 · 오답률 '+Math.round(r.rate)+'%</p>'
+   +'<button class="btn sm" data-act="rcopen" data-wk="'+wk+'">보기</button><button class="btn ghost sm" data-act="rcclose" data-wk="'+wk+'">닫기</button></div>';
+}
 function speakBtn(text){
   if(!('speechSynthesis' in window))return '';
   return '<button class="spk" data-act="speak" data-text="'+esc(text)+'" aria-label="발음 듣기"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>';
@@ -293,27 +313,30 @@ function speak(text){
   try{const ss=window.speechSynthesis;ss.cancel();const u=new SpeechSynthesisUtterance(text);u.lang='en-US';u.rate=0.9;ss.speak(u)}catch(e){}
 }
 function startView(parsed){
-  const wl=savedWrongList(), few=parsed.length<4, scope=effScope();
-  const avail=scope==='wrong'?wl.length:parsed.length, nq=Math.min(s.cfg.count,avail);
+  const wl=savedWrongList(), few=parsed.length<4, scope=effScope(), due=dueNow();
+  const avail=scope==='wrong'?wl.length:scope==='due'?due:parsed.length, nq=Math.min(s.cfg.count,avail);
   return '<div class="card">'
+   +cardView()
    +'<span class="eyebrow">VOCABULARY TEST</span>'
    +'<h1 class="title">오늘의 단어,<br>한 번 풀어볼까요?</h1>'
-   +'<p class="lead">영어 단어를 보고 뜻을 고르거나, 뜻을 보고 영어 단어를 고르는 문제가 섞여서 나와요. 틀린 단어는 저장해 두었다가 다음 시험에 먼저 다시 나옵니다.</p>'
+   +'<p class="lead">영어 단어를 보고 뜻을 고르거나, 뜻을 보고 영어 단어를 고르거나, 예문 빈칸에 들어갈 단어를 맞히는 문제가 섞여서 나와요. 틀린 단어는 다음 시험에 먼저 나오고, 맞힌 단어도 1일·3일·7일… 간격으로 다시 복습해요.</p>'
    +(s.flash?'<p class="note" style="color:var(--green-ink);font-weight:700" role="status">'+esc(s.flash)+'</p>':'')
    +saveWarn()
    +(s.text===SAMPLE?'<p class="note">지금은 예시 단어 10개가 들어 있어요. "단어장 편집"에서 내 단어로 바꿔 주세요.</p>':'')
    +'<div class="stats"><div class="stat"><small>내 단어장</small><strong>'+parsed.length+'</strong> <span>개</span></div>'
-   +'<div class="stat w"><small>틀렸던 단어 (저장됨)</small><strong>'+wl.length+'</strong> <span>개</span></div></div>'
+   +'<div class="stat w"><small>틀렸던 단어 (저장됨)</small><strong>'+wl.length+'</strong> <span>개</span></div>'
+   +'<div class="stat"><small>오늘 복습할 단어</small><strong>'+due+'</strong> <span>개</span></div></div>'
    +(wl.length?'<div class="rows">'+wl.map(w=>'<div class="row"><span class="tag">틀렸던 단어</span><span class="en">'+esc(w.w)+'</span><span class="ko">'+esc(w.ko)+'</span></div>').join('')+'</div>':'')
    +(few?'<p class="warn">시험을 보려면 단어가 4개 이상 필요해요. 단어장을 먼저 채워 주세요.</p>':'')
    +'<div class="sets">'
    +seg('풀이 방식','mode',['choice','type'],v=>v==='type'?'직접 쓰기':'보기 고르기')
-   +seg('출제 범위','scope',['all','wrong'],v=>v==='wrong'?'틀린 단어만':'전체',v=>v==='wrong'&&!wl.length,scope)
+   +seg('출제 범위','scope',['all','wrong','due'],v=>v==='wrong'?'틀린 단어만':v==='due'?'복습할 단어':'전체',v=>v==='wrong'&&!wl.length||v==='due'&&!due,scope)
    +seg('문제 수','count',[10,30,50],v=>v+'문제')
    +seg('문제당 제한 시간','sec',[0,10,20,30,60],v=>v?v+'초':'없음')+'</div>'
-   +(s.cfg.mode==='type'?'<p class="note">직접 쓰기는 한글 뜻을 보고 영어 단어를 써요. 철자가 정확해야 정답이고, 대소문자는 상관없어요.</p>':'')
+   +(s.cfg.mode==='type'?'<p class="note">직접 쓰기는 한글 뜻이나 예문 빈칸을 보고 영어 단어를 써요. 철자가 정확해야 정답이고, 대소문자는 상관없어요. 빈칸 문제는 단어장에 적힌 형태 그대로 써 주세요.</p>':'')
    +(s.cfg.scope==='wrong'&&!wl.length?'<p class="note">틀렸던 단어가 없어서 이번에는 전체 단어에서 나와요.</p>':'')
-   +(scope==='wrong'?'<p class="note">틀렸던 단어 '+wl.length+'개 중에서 '+nq+'문제가 나와요.</p>':!few&&parsed.length<s.cfg.count?'<p class="note">단어장에 단어가 '+parsed.length+'개라서 '+parsed.length+'문제만 나와요.</p>':'')
+   +(s.cfg.scope==='due'&&!due?'<p class="note">오늘 복습할 단어가 없어서 이번에는 전체 단어에서 나와요.</p>':'')
+   +(scope==='wrong'?'<p class="note">틀렸던 단어 '+wl.length+'개 중에서 '+nq+'문제가 나와요.</p>':scope==='due'?'<p class="note">오늘 복습할 단어 '+due+'개 중에서 '+nq+'문제가 나와요.</p>':!few&&parsed.length<s.cfg.count?'<p class="note">단어장에 단어가 '+parsed.length+'개라서 '+parsed.length+'문제만 나와요.</p>':'')
    +'<div class="btns"><button class="btn" data-act="start"'+(few?' disabled':'')+'>시험 시작하기</button>'
    +'<button class="btn ghost" data-act="edit">단어장 편집</button>'
    +'<button class="btn ghost" data-act="stats">내 기록</button>'
@@ -357,20 +380,25 @@ function quizView(){
   const timer=sec?'<div class="timer'+(c.answered&&s.picked===TIMEOUT?' low':rem<=5000?' low':'')+'"><span>'+(s.picked===TIMEOUT?'시간 초과':'남은 시간')+'</span><b id="tleft" role="timer">'+Math.ceil(rem/1000)+'초</b></div>'
     +'<div class="track"><div id="tfill" class="fill t" style="width:'+rem/(sec*1000)*100+'%"></div></div>':'';
   const ex=c.word.ex,exText=ex?(c.answered||c.en2ko?ex:blankWord(ex,c.word.w)):'';
+  const ask=c.blank?(typed?'빈칸에 들어갈 영어 단어를 써 보세요':'빈칸에 들어갈 영어 단어는?'):c.en2ko?'이 단어의 뜻은?':typed?'이 뜻에 맞는 영어 단어를 써 보세요':'이 뜻에 맞는 영어 단어는?';
+  // 빈칸 문제는 빈칸 예문이 문제 자리에 오고 뜻은 작게. 답한 뒤에는 원래 예문을 보여 준다.
+  const qMain=c.blank
+    ?'<div class="q-ex">'+esc(c.answered?ex:blankWord(ex,c.word.w))+'</div><p class="sub" style="margin-top:8px">뜻: '+esc(c.word.ko)+'</p>'
+    :'<div class="qrow" style="margin-top:8px"><div class="'+(c.en2ko?'q-en':'q-ko')+'">'+esc(c.en2ko?c.word.w:c.word.ko)+'</div>'+(c.en2ko?speakBtn(c.word.w):'')+'</div>'
+     +(exText?'<p class="ex"><span class="exl">예문</span>'+esc(exText)+'</p>':'');
   return '<div style="display:flex;flex-direction:column;gap:16px">'
    +'<div class="prog"><div class="prog-top"><b>문제 '+(s.qi+1)+' / '+total+'</b><span>정답 '+s.score+'개</span></div>'
    +'<div class="track" role="progressbar" aria-valuemin="0" aria-valuemax="'+total+'" aria-valuenow="'+(s.qi+(c.answered?1:0))+'" aria-label="진행도"><div class="fill" style="width:'+pct+'%"></div></div>'+timer+'</div>'
-   +'<div class="card"><div><div class="qhead"><span>'+(c.en2ko?'이 단어의 뜻은?':typed?'이 뜻에 맞는 영어 단어를 써 보세요':'이 뜻에 맞는 영어 단어는?')+'</span>'
+   +'<div class="card"><div><div class="qhead"><span>'+ask+'</span>'
    +(q.wasWrong?'<span class="tag" style="font-size:13px;padding:3px 12px">틀렸던 단어</span>':'')+'</div>'
-   +'<div class="qrow" style="margin-top:8px"><div class="'+(c.en2ko?'q-en':'q-ko')+'">'+esc(c.en2ko?c.word.w:c.word.ko)+'</div>'+(c.en2ko?speakBtn(c.word.w):'')+'</div>'
-   +(exText?'<p class="ex"><span class="exl">예문</span>'+esc(exText)+'</p>':'')
+   +(c.blank?'<div style="margin-top:8px">'+qMain+'</div>':qMain)
    +(c.answered&&!c.en2ko?'<div class="reveal"><span class="exl">정답</span><b>'+esc(c.word.w)+'</b>'+speakBtn(c.word.w)+'</div>':'')+'</div>'
    +(typed?typedForm(c):'<div class="opts">'+opts+'</div>')
    +'<div class="actions"><button class="btn hint" data-act="hint"'+(s.hint||c.answered?' disabled':'')+'>'+(s.hint?'힌트 사용함':typed?'힌트 (첫 글자 보기)':'힌트 (오답 2개 지우기)')+'</button>'
    +(c.answered?'<button id="next" class="btn sm" data-act="next">'+nextLabel()+'</button>':'')+'</div></div></div>';
 }
 function backupView(){
-  const out=makeBackup({words:s.text,wrong:s.wrong,log:s.log,cfg:s.cfg},new Date());
+  const out=makeBackup({words:s.text,wrong:s.wrong,log:s.log,cfg:s.cfg,srs:s.srs,wlog:s.wlog,seenReport:s.seen},new Date());
   return '<div class="card"><h1 class="title" style="font-size:clamp(28px,5vw,36px)">백업·복원</h1>'
    +'<p class="lead" style="font-size:15px">단어장, 틀린 단어, 기록, 설정을 글 한 덩어리로 저장해 둘 수 있어요. 기기를 바꾸거나 브라우저 데이터를 지우기 전에 백업해 두세요.</p>'
    +saveWarn()
@@ -398,7 +426,9 @@ function statsView(){
   const cap=UNITS.filter(u=>u[0]===s.unit)[0][2];
   const tabs='<div class="seg" role="group" aria-label="보는 단위">'+UNITS.map(u=>'<button class="segb" data-act="unit" data-val="'+u[0]+'" aria-pressed="'+(s.unit===u[0])+'">'+u[1]+'</button>').join('')+'</div>';
   let body;
-  if(!tot.n){
+  if(s.unit==='report'){
+    body=reportBody();
+  }else if(!tot.n){
     body='<p class="note">이 기간에는 푼 문제가 없어요. 시험을 풀면 오답률이 여기에 쌓여요.</p>';
   }else{
     const d=tr?Math.round(tr.diff):null;
@@ -411,8 +441,36 @@ function statsView(){
       +'<div class="chart" id="chart"></div>'
       +'<div class="tablewrap"><table class="tbl"><caption class="sr">'+cap+' 오답률 표</caption><thead><tr><th scope="col">기간</th><th scope="col">푼 문제</th><th scope="col">틀린 문제</th><th scope="col">오답률</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
   }
-  return '<div class="card"><h1 class="title" style="font-size:clamp(28px,5vw,36px)">내 기록</h1>'+tabs+'<p class="sub" style="margin-top:-8px">'+cap+'</p>'+saveWarn()+body
+  return '<div class="card"><h1 class="title" style="font-size:clamp(28px,5vw,36px)">내 기록</h1>'+tabs+'<p class="sub" style="margin-top:-8px">'+cap+'</p>'+(s.unit==='report'?'':saveWarn())+body
    +'<div class="btns"><button class="btn" data-act="home">처음 화면</button></div></div>';
+}
+// 화면과 복사하기가 같은 집계를 쓰도록 리포트 하나를 만들어 둘 다에 쓴다
+function curReport(){
+  const known=Object.create(null);parse(s.text).forEach(w=>{known[w.w.toLowerCase()]=w});
+  const r=weekReport(s.log,s.wlog,s.rweek),now=weekStart(today());
+  r.top=r.top.map(t=>{const w=known[t.w];return Object.assign({},t,w?{w:w.w,ko:w.ko}:{})}); // 지운 단어는 소문자 키 그대로
+  // 복습 예정은 지금 기준이라 이번 주·지난주 리포트에만 보여 준다
+  const upcoming=s.rweek===now||s.rweek===addDays(now,-7)?dueCount(s.srs,Object.keys(known),today(),7):null;
+  return {r,upcoming};
+}
+function reportBody(){
+  const {r,upcoming}=curReport(),now=weekStart(today()),first=firstWeek(s.log,s.wlog);
+  const nav='<div class="wknav"><button class="segb" data-act="rweek" data-val="-7" aria-label="이전 주"'+(!first||s.rweek<=first?' disabled':'')+'>◀ 이전</button>'
+   +'<b aria-live="polite">'+fmtWeek(s.rweek)+(s.rweek===now?' (이번 주)':'')+'</b>'
+   +'<button class="segb" data-act="rweek" data-val="7" aria-label="다음 주"'+(s.rweek>=now?' disabled':'')+'>다음 ▶</button></div>';
+  const d=r.diff==null?null:Math.round(r.diff);
+  const nums=!r.n?'<p class="note">이 주에는 푼 문제가 없어요.</p>'
+   :'<div class="stats"><div class="stat"><small>푼 문제</small><strong>'+r.n+'</strong> <span>문제</span></div>'
+   +'<div class="stat w"><small>오답률</small><strong>'+Math.round(r.rate)+'</strong> <span>%</span></div>'
+   +'<div class="stat"><small>공부한 날</small><strong>'+r.days+'</strong> <span>/ 7일</span></div>'
+   +'<div class="stat"><small>지난주 대비 오답률</small>'+(d==null?'<strong>—</strong><div class="sub">비교할 기록 없음</div>':d<0?'<strong>▼ '+(-d)+'</strong> <span>%p 줄었어요</span>':d>0?'<strong>▲ '+d+'</strong> <span>%p 늘었어요</span>':'<strong>＝ 0</strong> <span>%p 그대로예요</span>')+'</div></div>';
+  const words=r.words==='none'?'<p class="note">이 주에는 단어별 기록이 없어요. 단어별 기록은 이번 업데이트 이후 푼 문제부터 쌓여요.</p>'
+   :(r.top.length?'<div class="rows">'+r.top.map(t=>'<div class="row"><span class="tag">'+t.wrong+'번 틀림</span><span class="en">'+esc(t.w)+'</span>'+(t.ko?'<span class="ko">'+esc(t.ko)+'</span>':'')+'</div>').join('')+'</div>':'<p class="note">이 주에 틀린 단어가 없어요.</p>')
+    +(r.words!=='full'?'<p class="sub">'+fmtWeek(r.words).split(' ~ ')[0]+'부터 기록된 내용이에요.</p>':'');
+  return nav+saveWarn()+nums
+   +'<div><h2 class="sec">자주 틀린 단어</h2></div>'+words
+   +(upcoming!=null?'<p class="note">앞으로 7일 동안 복습할 단어 <b>'+upcoming+'</b>개</p>':'')
+   +'<div class="btns"><button class="btn ghost sm" data-act="rcopy">리포트 글로 복사</button></div>';
 }
 let rzId=0;
 function drawChart(){
@@ -527,9 +585,8 @@ function tick(){
 function start(){
   const words=parse(s.text);if(words.length<4)return;
   stopAuto();
-  const quiz=buildQuiz(words,s.wrong,s.cfg.count,Math.random,effScope()==='wrong');
+  const quiz=buildQuiz(words,s.wrong,s.cfg.count,Math.random,{scope:effScope(),srs:s.srs,today:today(),mode:s.cfg.mode});
   if(!quiz.length)return;
-  if(s.cfg.mode==='type')quiz.forEach(q=>{q.dir='ko2en'}); // 직접 쓰기는 한글 뜻 → 영어 단어만(한글 뜻은 정답이 여러 개라 채점할 수 없다)
   Object.assign(s,{screen:'quiz',words,quiz,qi:0,picked:-1,score:0,hint:false,missed:[],fixed:[],typed:''});
   render();window.scrollTo(0,0);startTimer();
 }
@@ -542,7 +599,10 @@ function pick(k){
   if(!ok&&wrong.indexOf(key)<0)wrong=wrong.concat([key]);
   if(ok&&q.wasWrong)wrong=wrong.filter(x=>x!==key);
   store.set('wc_wrong',JSON.stringify(wrong));
-  recordAnswer(s.log,dayKey(new Date()),!ok);store.set('wc_log',JSON.stringify(s.log));
+  const day=today(); // 자정을 넘겨도 한 답의 기록은 모두 같은 날짜로
+  recordAnswer(s.log,day,!ok);store.set('wc_log',JSON.stringify(s.log));
+  recordSrs(s.srs,key,ok,day);store.set('wc_srs',JSON.stringify(s.srs));
+  pruneWlog(recordWord(s.wlog,day,key,ok),day);store.set('wc_wlog',JSON.stringify(s.wlog));
   s.wrong=wrong;s.picked=k;
   if(ok)s.score++;else s.missed.push(q.wi);
   if(ok&&q.wasWrong)s.fixed.push(q.wi);
@@ -560,18 +620,19 @@ function next(){
 function submitTyped(){
   const c=cur();
   if(!c||s.picked>=0||!s.typed.trim())return;
-  pick(isCorrectTyped(s.words,c.q.wi,s.typed)?c.q.cpos:WRONG_ANS);
+  pick(isCorrectTyped(s.words,c.q.wi,s.typed,c.q.dir)?c.q.cpos:WRONG_ANS);
 }
-// 저장 4곳이 모두 성공해야 화면의 데이터를 바꾼다. 하나라도 실패하면 원래 값으로 되돌리고 false.
+// 저장할 곳이 모두 성공해야 화면의 데이터를 바꾼다. 하나라도 실패하면 원래 값으로 되돌리고 false.
 function applyBackup(d){
-  const next={wc_words:d.words,wc_wrong:JSON.stringify(d.wrong),wc_log:JSON.stringify(d.log),wc_cfg:JSON.stringify(d.cfg)};
-  const old={wc_words:store.get('wc_words',null),wc_wrong:store.get('wc_wrong',null),wc_log:store.get('wc_log',null),wc_cfg:store.get('wc_cfg',null)};
-  const keys=Object.keys(next);
+  const next={wc_words:d.words,wc_wrong:JSON.stringify(d.wrong),wc_log:JSON.stringify(d.log),wc_cfg:JSON.stringify(d.cfg),
+    wc_srs:JSON.stringify(d.srs),wc_wlog:JSON.stringify(d.wlog),wc_seenReport:d.seenReport};
+  const keys=Object.keys(next),old={};
+  keys.forEach(k=>{old[k]=store.get(k,null)});
   if(!keys.every(k=>store.set(k,next[k]))){
     keys.forEach(k=>{if(old[k]!==null)store.set(k,old[k]);else try{localStorage.removeItem(k)}catch(e){}});
     return false;
   }
-  s.text=d.words;s.draft=d.words;s.wrong=d.wrong;s.log=d.log;s.cfg=d.cfg;
+  s.text=d.words;s.draft=d.words;s.wrong=d.wrong;s.log=d.log;s.cfg=d.cfg;s.srs=d.srs;s.wlog=d.wlog;s.seen=d.seenReport;
   return true;
 }
 function saveFile(text){
@@ -587,8 +648,19 @@ app.addEventListener('click',e=>{
   const a=b.dataset.act;
   if(a==='start')start();
   else if(a==='pick')pick(+b.dataset.k);
-  else if(a==='stats'){s.screen='stats';render();window.scrollTo(0,0)}
+  else if(a==='stats'){s.screen='stats';s.rweek=weekStart(today());render();window.scrollTo(0,0)}
   else if(a==='unit'){s.unit=b.dataset.val;render()}
+  else if(a==='rweek'){s.rweek=addDays(s.rweek,+b.dataset.val);render()}
+  else if(a==='rcopen'||a==='rcclose'){
+    s.seen=b.dataset.wk;store.set('wc_seenReport',s.seen);
+    if(a==='rcopen'){s.screen='stats';s.unit='report';s.rweek=s.seen;window.scrollTo(0,0)}
+    render();
+  }
+  else if(a==='rcopy'){
+    const {r,upcoming}=curReport(),t=reportText(r,upcoming);
+    const done=()=>{b.textContent='복사했어요'};
+    try{navigator.clipboard.writeText(t).then(done,()=>{b.textContent='복사가 막혀 있어요'})}catch(err){b.textContent='복사가 막혀 있어요'}
+  }
   else if(a==='cfg'){const v=b.dataset.val;s.cfg[b.dataset.key]=/^\d+$/.test(v)?+v:v;store.set('wc_cfg',JSON.stringify(s.cfg));render()}
   else if(a==='speak')speak(b.dataset.text);
   else if(a==='backup'){s.screen='backup';s.bk={text:'',armed:false};render();window.scrollTo(0,0)}
